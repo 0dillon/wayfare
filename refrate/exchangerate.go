@@ -1,0 +1,106 @@
+package refrate
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/shopspring/decimal"
+)
+
+// DefaultExchangeRateAPI is the open endpoint of exchangerate-api's free
+// tier. It is used rather than the ECB-backed alternatives because those
+// publish only the ~30 currencies the ECB tracks, and NGN is not among them —
+// which would make them useless for the one corridor this project exists to
+// serve.
+const DefaultExchangeRateAPI = "https://open.er-api.com/v6/latest/"
+
+// ExchangeRateAPI is a Provider backed by an exchangerate-api-style endpoint
+// returning base-relative rates.
+//
+// A caveat worth understanding before trusting the output: feeds like this
+// publish an official or interbank rate. For currencies with exchange
+// controls — NGN historically among them — the rate people actually transact
+// at can diverge sharply from the official one. So this is a defensible
+// benchmark, not ground truth, and the Source field is carried through to the
+// UI so the user knows what they are being compared against.
+type ExchangeRateAPI struct {
+	BaseURL string       // defaults to DefaultExchangeRateAPI
+	Client  *http.Client // defaults to a client with a 10s timeout
+}
+
+// Name identifies the provider.
+func (e *ExchangeRateAPI) Name() string { return "exchangerate-api" }
+
+func (e *ExchangeRateAPI) client() *http.Client {
+	if e.Client != nil {
+		return e.Client
+	}
+	return &http.Client{Timeout: 10 * time.Second}
+}
+
+func (e *ExchangeRateAPI) baseURL() string {
+	if e.BaseURL != "" {
+		return e.BaseURL
+	}
+	return DefaultExchangeRateAPI
+}
+
+// erAPIResponse is the subset of the upstream payload we rely on.
+type erAPIResponse struct {
+	Result             string             `json:"result"`
+	BaseCode           string             `json:"base_code"`
+	TimeLastUpdateUnix int64              `json:"time_last_update_unix"`
+	Rates              map[string]float64 `json:"rates"`
+	ErrorType          string             `json:"error-type"`
+}
+
+// Rate implements Provider.
+func (e *ExchangeRateAPI) Rate(ctx context.Context, base, quote string) (Rate, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL()+base, nil)
+	if err != nil {
+		return Rate{}, fmt.Errorf("refrate: building request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := e.client().Do(req)
+	if err != nil {
+		return Rate{}, fmt.Errorf("refrate: fetching %s rates: %w", base, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return Rate{}, fmt.Errorf("refrate: %s returned HTTP %d", e.Name(), resp.StatusCode)
+	}
+
+	var body erAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return Rate{}, fmt.Errorf("refrate: decoding response: %w", err)
+	}
+	if body.Result != "" && body.Result != "success" {
+		return Rate{}, fmt.Errorf("refrate: %s error: %s", e.Name(), body.ErrorType)
+	}
+
+	// A rate of exactly zero is treated as absent rather than as a real
+	// quote. Taking it at face value would make the spread calculation
+	// divide by zero, or worse, report a route as infinitely good.
+	v, ok := body.Rates[quote]
+	if !ok || v == 0 {
+		return Rate{}, &ErrNoRate{Base: base, Quote: quote, Source: e.Name()}
+	}
+
+	asOf := time.Now()
+	if body.TimeLastUpdateUnix > 0 {
+		asOf = time.Unix(body.TimeLastUpdateUnix, 0)
+	}
+
+	return Rate{
+		Base:   base,
+		Quote:  quote,
+		Mid:    decimal.NewFromFloat(v),
+		AsOf:   asOf,
+		Source: e.Name(),
+	}, nil
+}
