@@ -165,6 +165,82 @@ status="live"
 	}
 }
 
+// malformedNGNC reproduces the defect in the live ngnc.online stellar.toml as
+// served on 2026-08-04: a stray "s" after a quoted value on the image line.
+// A conforming TOML parser rejects the whole document over it.
+const malformedNGNC = `
+NETWORK_PASSPHRASE="Public Global Stellar Network ; September 2015"
+WEB_AUTH_ENDPOINT="https://anchor.ngnc.online/auth"
+TRANSFER_SERVER_SEP0024="https://anchor.ngnc.online/sep24"
+
+[[CURRENCIES]]
+code="NGNC"
+issuer="GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6"
+status="live"
+is_asset_anchored=true
+
+[[CURRENCIES]]
+code="KESC"
+issuer="GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6"
+status="pending"
+image="https://uploads-ssl.webflow.com/6512d/65f06c_KESc.png" s
+`
+
+// TestSalvageRecoversMalformedTOML pins the behaviour that keeps the most
+// important anchor in this corridor visible.
+//
+// Strict parsing must still fail — that is what makes the document malformed
+// — but the capability fields have to survive, because "the anchor cannot be
+// priced" is a conclusion that must not depend on a stray character in an
+// unrelated image URL.
+func TestSalvageRecoversMalformedTOML(t *testing.T) {
+	var strict TOML
+	if _, err := toml.Decode(malformedNGNC, &strict); err == nil {
+		t.Fatal("fixture is valid TOML; it no longer reproduces the live defect")
+	}
+
+	p := profileFrom("ngnc.online", salvageTOML(malformedNGNC))
+
+	if p.Priceable {
+		t.Error("salvaged profile reported as priceable; it publishes no ANCHOR_QUOTE_SERVER")
+	}
+	if !p.SEP24 {
+		t.Error("salvage lost TRANSFER_SERVER_SEP0024")
+	}
+	if !p.Mainnet {
+		t.Error("salvage lost NETWORK_PASSPHRASE")
+	}
+	if !p.SupportsAsset(asset.NGNC()) {
+		t.Error("salvage lost the NGNC currency entry")
+	}
+
+	// KESC is status="pending", so it must not be treated as live even
+	// though it is the entry carrying the malformation.
+	if p.SupportsAsset(asset.Stellar("KESC", asset.NGNCIssuer)) {
+		t.Error("KESC is pending, not live, and must not be routable")
+	}
+	if got, want := len(p.LiveCurrencies()), 1; got != want {
+		t.Errorf("LiveCurrencies = %d, want %d", got, want)
+	}
+}
+
+// TestSalvageHandlesTrailingJunkValues covers the unquote helper directly.
+func TestSalvageHandlesTrailingJunkValues(t *testing.T) {
+	cases := map[string]string{
+		`"https://example.com/a.png" s`: "https://example.com/a.png",
+		`"plain"`:                       "plain",
+		`"with \"escape\""`:             `with "escape"`,
+		`true`:                          "true",
+		`2 # trailing comment`:          "2",
+		`"unterminated`:                 "unterminated",
+	}
+	for in, want := range cases {
+		if got := unquote(in); got != want {
+			t.Errorf("unquote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestTOMLURL(t *testing.T) {
 	for _, in := range []string{"ngnc.online", "https://ngnc.online", "ngnc.online/"} {
 		if got, want := TOMLURL(in), "https://ngnc.online/.well-known/stellar.toml"; got != want {

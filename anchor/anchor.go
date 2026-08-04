@@ -20,6 +20,7 @@ package anchor
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -88,6 +89,17 @@ type Profile struct {
 
 	// Mainnet reports whether the TOML declares the public network.
 	Mainnet bool
+
+	// Malformed reports that the anchor's stellar.toml is not valid TOML
+	// and the fields below were recovered by a salvage pass. The profile is
+	// still usable, but the defect is surfaced: a published document that
+	// does not parse says something about how the anchor is operated, and
+	// the recovered fields carry less confidence than parsed ones.
+	Malformed bool
+
+	// MalformedReason is the strict parser's error, retained so the defect
+	// can be reported to the anchor rather than merely worked around.
+	MalformedReason string
 }
 
 // SupportsAsset reports whether the anchor lists a live currency matching a.
@@ -126,6 +138,12 @@ func (p Profile) Explain() string {
 		fmt.Fprintf(&b, " (%s)", p.TOML.OrgName)
 	}
 	b.WriteString("\n")
+
+	if p.Malformed {
+		b.WriteString("  WARNING:    stellar.toml is not valid TOML; fields below were\n")
+		b.WriteString("              recovered by a salvage pass and are less reliable.\n")
+		fmt.Fprintf(&b, "              parser said: %s\n", p.MalformedReason)
+	}
 
 	if !p.Mainnet && p.TOML.NetworkPassphrase != "" {
 		fmt.Fprintf(&b, "  network:    %s (NOT mainnet)\n", p.TOML.NetworkPassphrase)
@@ -202,12 +220,26 @@ func (r *Resolver) Resolve(ctx context.Context, domain string) (*Profile, error)
 		return nil, fmt.Errorf("anchor: %s returned HTTP %d for stellar.toml", domain, resp.StatusCode)
 	}
 
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxTOMLBytes))
+	if err != nil {
+		return nil, fmt.Errorf("anchor: reading stellar.toml for %s: %w", domain, err)
+	}
+
 	var t TOML
-	if _, err := toml.NewDecoder(resp.Body).Decode(&t); err != nil {
-		return nil, fmt.Errorf("anchor: parsing stellar.toml for %s: %w", domain, err)
+	if _, err := toml.Decode(string(raw), &t); err != nil {
+		// Not valid TOML. Recover what we can rather than losing the
+		// anchor entirely, and record the defect. See salvage.go.
+		p := profileFrom(domain, salvageTOML(string(raw)))
+		p.Malformed = true
+		p.MalformedReason = err.Error()
+		return p, nil
 	}
 	return profileFrom(domain, t), nil
 }
+
+// maxTOMLBytes caps how much of a stellar.toml is read. SEP-1 sets a 100KB
+// limit; this bounds memory when a domain serves something unexpected.
+const maxTOMLBytes = 100 * 1024
 
 // profileFrom derives capabilities from a parsed TOML. Split out so it can be
 // tested against fixtures without network access.
