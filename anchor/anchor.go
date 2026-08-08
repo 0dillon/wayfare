@@ -27,7 +27,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/Fury03/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/asset"
 )
 
 // Currency is one entry from the [[CURRENCIES]] array of a stellar.toml.

@@ -6,7 +6,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/Fury03/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/asset"
 )
 
 // BookHealth summarises whether a market is functioning.

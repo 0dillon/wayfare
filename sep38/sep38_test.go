@@ -9,7 +9,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/Fury03/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/asset"
 )
 
 // specExamplePrice is the worked example from SEP-0038 itself, reproduced

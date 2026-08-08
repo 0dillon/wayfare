@@ -33,7 +33,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/Fury03/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/asset"
 )
 
 // DefaultHorizonURL is SDF's public mainnet Horizon instance.

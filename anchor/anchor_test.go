@@ -6,7 +6,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/Fury03/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/asset"
 )
 
 // ngncTOML reproduces the fields observed in the live stellar.toml served by

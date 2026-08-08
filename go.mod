@@ -1,4 +1,4 @@
-module github.com/Fury03/wayfare
+module github.com/Wayfare-labs/wayfare
 
 go 1.22.2
 

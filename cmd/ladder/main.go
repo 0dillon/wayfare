@@ -18,10 +18,10 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/Fury03/wayfare/asset"
-	"github.com/Fury03/wayfare/dex"
-	"github.com/Fury03/wayfare/refrate"
-	"github.com/Fury03/wayfare/route"
+	"github.com/Wayfare-labs/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/dex"
+	"github.com/Wayfare-labs/wayfare/refrate"
+	"github.com/Wayfare-labs/wayfare/route"
 )
 
 // corridor names a destination token and the fiat currency it claims to track.

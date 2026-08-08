@@ -30,9 +30,9 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/Fury03/wayfare/asset"
-	"github.com/Fury03/wayfare/dex"
-	"github.com/Fury03/wayfare/refrate"
+	"github.com/Wayfare-labs/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/dex"
+	"github.com/Wayfare-labs/wayfare/refrate"
 )
 
 // Verdict grades a route against the reference mid-market rate.

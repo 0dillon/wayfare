@@ -46,7 +46,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/Fury03/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/asset"
 )
 
 // Context values defined by SEP-38. The anchor may quote different prices
