@@ -1,9 +1,13 @@
-# Build output
+# Build output.
+#
+# The binary names are anchored to the repo root on purpose: an unanchored
+# "wayfared" would also match cmd/wayfared, silently excluding the source
+# directory that builds it.
 /bin/
-dist/
-wayfare
-ladder
-wayfared
+/dist/
+/wayfare
+/wayfared
+/ladder
 
 # Test and coverage artifacts
 *.out

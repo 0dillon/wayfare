@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wayfare — corridor integrity monitor</title>
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --panel: #ffffff;
+    --border: #e4e2dd;
+    --ink: #1a1a18;
+    --muted: #6b6862;
+    --accent: #2f6f5e;
+    --bad: #a03e2f;
+    --warn: #96712a;
+    --ok: #2f6f5e;
+    --grid: #ecebe7;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161815;
+      --panel: #1e211d;
+      --border: #33372f;
+      --ink: #eceae4;
+      --muted: #9a978e;
+      --accent: #7fb8a4;
+      --bad: #e08b78;
+      --warn: #d9b06a;
+      --ok: #7fb8a4;
+      --grid: #2a2e27;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 1.25rem; margin-bottom: 1.75rem; }
+  h1 { font-size: 1.35rem; margin: 0 0 .3rem; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: .92rem; margin: 0; }
+  .controls { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; margin-bottom: 1.5rem; }
+  select, button {
+    font: inherit; padding: .5rem .8rem; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--ink);
+  }
+  button { cursor: pointer; font-weight: 550; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .55; cursor: default; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1.15rem 1.25rem; margin-bottom: 1.25rem;
+  }
+  .badge {
+    display: inline-block; font: 600 .72rem/1 var(--mono); letter-spacing: .06em;
+    padding: .4rem .6rem; border-radius: 5px; border: 1px solid currentColor;
+    text-transform: uppercase;
+  }
+  .b-direct { color: var(--muted); }
+  .b-derivative { color: var(--warn); }
+  .b-nomarket { color: var(--bad); }
+  .finding { font-size: 1.02rem; margin: .85rem 0 0; }
+  .rec-none {
+    margin-top: .9rem; padding: .7rem .85rem; border-radius: 6px;
+    border: 1px solid var(--bad); color: var(--bad); font-size: .9rem;
+  }
+  .rec-some {
+    margin-top: .9rem; padding: .7rem .85rem; border-radius: 6px;
+    border: 1px solid var(--ok); color: var(--ok); font-size: .9rem;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  th, td { text-align: right; padding: .42rem .5rem; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child, th:last-child, td:last-child { text-align: left; }
+  th { color: var(--muted); font-weight: 550; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .v-unusable { color: var(--bad); font-weight: 600; }
+  .v-poor { color: var(--warn); }
+  .v-good, .v-fair { color: var(--ok); }
+  .scroll { overflow-x: auto; }
+  .meta { color: var(--muted); font-size: .82rem; margin-top: .9rem; }
+  .err { color: var(--bad); }
+  h2 { font-size: .95rem; margin: 0 0 .8rem; letter-spacing: .01em; }
+  .case { font-size: .88rem; color: var(--muted); }
+  .case strong { color: var(--ink); font-weight: 600; }
+  svg { width: 100%; height: auto; display: block; }
+  .axis { fill: var(--muted); font: 10px var(--mono); }
+  footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--border); padding-top: 1.1rem; margin-top: 2rem; }
+  code { font-family: var(--mono); font-size: .85em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Wayfare</h1>
+    <p class="sub">Corridor integrity monitor. Prices a stablecoin&nbsp;&rarr;&nbsp;fiat-token
+    corridor across trade sizes, scores every route against an independent reference
+    rate, and states plainly when none are worth taking.</p>
+  </header>
+
+  <div class="controls">
+    <label for="to">Corridor</label>
+    <select id="to">
+      <option value="NGNC">USDC &rarr; NGNC (naira)</option>
+      <option value="GHSC">USDC &rarr; GHSC (cedi)</option>
+      <option value="KESC">USDC &rarr; KESC (shilling)</option>
+    </select>
+    <button id="run">Measure live</button>
+    <span id="status" class="sub"></span>
+  </div>
+
+  <div id="out"></div>
+
+  <footer>
+    Every figure is fetched live from Horizon pathfinding and an independent rate
+    provider at the moment you press Measure. Nothing is cached, estimated, or
+    interpolated. Wayfare is non-custodial and read-only: it never holds funds,
+    issues tokens, or moves money.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, c => (
+  {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+const badgeClass = (i) =>
+  i === 'NO-MARKET' ? 'b-nomarket' : i === 'DERIVATIVE' ? 'b-derivative' : 'b-direct';
+
+const verdictClass = (v) => 'v-' + String(v).toLowerCase();
+
+async function measure() {
+  const to = $('to').value;
+  $('run').disabled = true;
+  $('status').textContent = 'measuring live — a full ladder is a dozen round trips…';
+  $('out').innerHTML = '';
+  try {
+    const r = await fetch(`/api/corridor?to=${encodeURIComponent(to)}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    render(data);
+    $('status').textContent = '';
+  } catch (e) {
+    $('out').innerHTML = `<div class="panel err">Could not measure: ${esc(e.message)}</div>`;
+    $('status').textContent = '';
+  } finally {
+    $('run').disabled = false;
+  }
+}
+
+function render(d) {
+  const parts = [];
+
+  // Headline: integrity state and the finding, before any numbers.
+  parts.push(`<div class="panel">
+    <span class="badge ${badgeClass(d.integrity)}">${esc(d.integrity)}</span>
+    <p class="finding">${esc(d.finding)}</p>
+    ${recommendationBlock(d)}
+    <p class="meta">Reference ${esc(d.reference_pair)} mid
+      <strong>${esc(d.reference_mid)}</strong> via ${esc(d.reference_source)} ·
+      measured ${esc(d.measured_at)}</p>
+  </div>`);
+
+  const priced = d.rungs.filter(r => r.priced);
+  if (priced.length) {
+    parts.push(`<div class="panel"><h2>Loss against mid, by size</h2>${curve(priced)}</div>`);
+    parts.push(`<div class="panel"><h2>Measurements</h2><div class="scroll">${table(d.rungs)}</div></div>`);
+  } else {
+    parts.push(`<div class="panel"><h2>Measurements</h2><div class="scroll">${table(d.rungs)}</div></div>`);
+  }
+
+  parts.push(caseStudy(d));
+  $('out').innerHTML = parts.join('');
+}
+
+// The recommendation block is the one place the tool could mislead, so it
+// never falls back to "the best of a bad set".
+function recommendationBlock(d) {
+  if (d.integrity === 'NO-MARKET') {
+    return `<div class="rec-none">No route exists at any size tested.
+      There is nothing to recommend, and nothing to price.</div>`;
+  }
+  if (!d.recommended) {
+    return `<div class="rec-none">No recommendation. Every size tested is graded
+      Unusable, so presenting a &ldquo;best&rdquo; route here would imply one is
+      worth taking.</div>`;
+  }
+  const q = d.recommended;
+  return `<div class="rec-some">Recommended at ${esc(d.recommended_size)}
+    ${esc(d.send_asset.code)}: ${esc(q.description)} &mdash; ${esc(q.loss_pct)}%
+    below mid, graded ${esc(q.verdict)}.</div>`;
+}
+
+// A log-x line chart. Loss is clamped to 0–100 so the shape of the curve, not
+// an outlier, sets the scale.
+function curve(rungs) {
+  const W = 640, H = 220, P = 34;
+  const xs = rungs.map(r => Math.log10(parseFloat(r.send_amount)));
+  const ys = rungs.map(r => Math.min(100, Math.max(0, parseFloat(r.quote.loss_pct))));
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const sx = v => P + (x1 === x0 ? 0.5 : (v - x0) / (x1 - x0)) * (W - P * 2);
+  const sy = v => H - P - (v / 100) * (H - P * 2);
+
+  const pts = xs.map((x, i) => `${sx(x).toFixed(1)},${sy(ys[i]).toFixed(1)}`);
+  const grid = [0, 20, 50, 100].map(v =>
+    `<line x1="${P}" y1="${sy(v)}" x2="${W - P}" y2="${sy(v)}"
+       stroke="var(--grid)" stroke-width="1"/>
+     <text class="axis" x="4" y="${sy(v) + 3}">${v}%</text>`).join('');
+
+  // The 20% line is the Unusable threshold; everything above it is refused.
+  const thresh = `<line x1="${P}" y1="${sy(20)}" x2="${W - P}" y2="${sy(20)}"
+      stroke="var(--bad)" stroke-width="1" stroke-dasharray="4 3" opacity="0.7"/>
+    <text class="axis" x="${W - P - 96}" y="${sy(20) - 5}" fill="var(--bad)">unusable above</text>`;
+
+  const dots = xs.map((x, i) =>
+    `<circle cx="${sx(x).toFixed(1)}" cy="${sy(ys[i]).toFixed(1)}" r="3"
+       fill="var(--bad)"><title>${esc(rungs[i].send_amount)} → ${esc(rungs[i].quote.loss_pct)}% loss</title></circle>`).join('');
+
+  const labels = rungs.map((r, i) =>
+    (i === 0 || i === rungs.length - 1 || i === Math.floor(rungs.length / 2))
+      ? `<text class="axis" x="${sx(xs[i]).toFixed(1)}" y="${H - P + 14}"
+           text-anchor="middle">${esc(r.send_amount)}</text>` : '').join('');
+
+  return `<svg viewBox="0 0 ${W} ${H}" role="img"
+    aria-label="Loss against mid rising with trade size">
+    ${grid}${thresh}
+    <polyline points="${pts.join(' ')}" fill="none" stroke="var(--bad)" stroke-width="2"/>
+    ${dots}${labels}
+    <text class="axis" x="${W / 2}" y="${H - 4}" text-anchor="middle">send amount (log scale)</text>
+  </svg>`;
+}
+
+function table(rungs) {
+  const rows = rungs.map(r => {
+    if (!r.priced) {
+      const why = r.error ? esc(r.error)
+        : r.integrity === 'NO-MARKET' ? 'no path exists at this size'
+        : 'not priced';
+      return `<tr><td class="num">${esc(r.send_amount)}</td>
+        <td colspan="4" class="err">${why}</td>
+        <td>${esc(r.integrity)}</td></tr>`;
+    }
+    const q = r.quote;
+    return `<tr>
+      <td class="num">${esc(r.send_amount)}</td>
+      <td class="num">${esc(q.receive_amount)}</td>
+      <td class="num">${esc(q.effective_rate)}</td>
+      <td class="num ${verdictClass(q.verdict)}">${esc(q.loss_pct)}%</td>
+      <td class="${verdictClass(q.verdict)}">${esc(q.verdict)}</td>
+      <td>${esc(q.description)}</td>
+    </tr>`;
+  }).join('');
+
+  return `<table>
+    <thead><tr>
+      <th>Send</th><th>Receive</th><th>Rate</th><th>Loss</th><th>Verdict</th><th>Path</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function caseStudy(d) {
+  const dep = d.depends_on.map(a => esc(a.code)).join(' and ');
+  const extra = d.integrity === 'DERIVATIVE'
+    ? ` This corridor has no independent market: every path routes through ${dep},
+        so its figures compound ${dep}&rsquo;s cost with its own.`
+    : d.integrity === 'NO-MARKET'
+    ? ` This corridor has no market at all, which is a different result from
+        expensive pricing and is reported as such.`
+    : '';
+
+  return `<div class="panel case">
+    <h2>Case study #1 &mdash; one issuer&rsquo;s African-fiat set</h2>
+    <p>NGNC, GHSC and KESC are issued from a single Stellar account. Their issuer
+    declares NGNC <code>status="live"</code> and the other two
+    <code>status="pending"</code>. <strong>The corridor its issuer declares live
+    still loses about 25% at dust size</strong>, where price impact is negligible
+    &mdash; so that figure is the corridor&rsquo;s structural floor rather than a
+    depth effect.${extra}</p>
+    <p>These are measurements of on-chain DEX liquidity, taken live. They describe
+    what the ledger and the issuer&rsquo;s own published SEP-1 document say, and
+    nothing about intent. The anchor publishes no <code>ANCHOR_QUOTE_SERVER</code>,
+    so its own rails cannot be priced programmatically and are not measured here.
+    Wayfare works on any stablecoin &rarr; fiat-token corridor; this set is simply
+    the first one measured.</p>
+  </div>`;
+}
+
+$('run').addEventListener('click', measure);
+</script>
+</body>
+</html>
