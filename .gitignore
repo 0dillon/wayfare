@@ -1,3 +1,16 @@
+# Build output
+/bin/
 dist/
 wayfare
+ladder
+wayfared
+
+# Test and coverage artifacts
 *.out
+coverage.html
+
+# Logs
+*.log
+
+# Editor and OS
+.DS_Store
