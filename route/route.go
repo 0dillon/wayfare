@@ -127,9 +127,9 @@ type Quote struct {
 	Description string // e.g. "USDC -> XLM -> NGNC"
 	Source      string // anchor domain, or "stellar-dex"
 
-	SendAsset    asset.Asset
-	SendAmount   decimal.Decimal
-	ReceiveAsset asset.Asset
+	SendAsset     asset.Asset
+	SendAmount    decimal.Decimal
+	ReceiveAsset  asset.Asset
 	ReceiveAmount decimal.Decimal
 
 	// EffectiveRate is receive units per send unit — the all-in rate the
@@ -137,7 +137,7 @@ type Quote struct {
 	EffectiveRate decimal.Decimal
 
 	// ReferenceMid is the independent mid-market rate for the same pair.
-	ReferenceMid   decimal.Decimal
+	ReferenceMid    decimal.Decimal
 	ReferenceSource string
 
 	// LossPct is how far below mid the effective rate falls, as a

@@ -54,17 +54,17 @@ func (c Currency) Live() bool {
 
 // TOML is the subset of a stellar.toml this project reads.
 type TOML struct {
-	Version             string `toml:"VERSION"`
-	NetworkPassphrase   string `toml:"NETWORK_PASSPHRASE"`
-	WebAuthEndpoint     string `toml:"WEB_AUTH_ENDPOINT"`
-	TransferServer      string `toml:"TRANSFER_SERVER"`
-	TransferServer24    string `toml:"TRANSFER_SERVER_SEP0024"`
-	DirectPaymentServer string `toml:"DIRECT_PAYMENT_SERVER"`
-	AnchorQuoteServer   string `toml:"ANCHOR_QUOTE_SERVER"`
-	KYCServer           string `toml:"KYC_SERVER"`
-	SigningKey          string `toml:"SIGNING_KEY"`
-	OrgName             string `toml:"ORG_NAME"`
-	OrgURL              string `toml:"ORG_URL"`
+	Version             string     `toml:"VERSION"`
+	NetworkPassphrase   string     `toml:"NETWORK_PASSPHRASE"`
+	WebAuthEndpoint     string     `toml:"WEB_AUTH_ENDPOINT"`
+	TransferServer      string     `toml:"TRANSFER_SERVER"`
+	TransferServer24    string     `toml:"TRANSFER_SERVER_SEP0024"`
+	DirectPaymentServer string     `toml:"DIRECT_PAYMENT_SERVER"`
+	AnchorQuoteServer   string     `toml:"ANCHOR_QUOTE_SERVER"`
+	KYCServer           string     `toml:"KYC_SERVER"`
+	SigningKey          string     `toml:"SIGNING_KEY"`
+	OrgName             string     `toml:"ORG_NAME"`
+	OrgURL              string     `toml:"ORG_URL"`
 	Currencies          []Currency `toml:"CURRENCIES"`
 }
 
