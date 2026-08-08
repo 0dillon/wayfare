@@ -62,8 +62,8 @@ func main() {
 
 	fmt.Printf("corridor USDC -> %s, benchmarked against USD/%s\n", c.dest.Code, c.refPair)
 	fmt.Printf("run at %s\n\n", time.Now().UTC().Format(time.RFC3339))
-	fmt.Printf("%-8s %14s %12s %9s %-10s %s\n",
-		"SEND", "RECEIVE", "RATE", "LOSS%", "VERDICT", "PATH")
+	fmt.Printf("%-8s %14s %12s %9s %-10s %-11s %s\n",
+		"SEND", "RECEIVE", "RATE", "LOSS%", "VERDICT", "INTEGRITY", "PATH")
 
 	priced := 0
 	for _, s := range strings.Split(*sizesFlag, ",") {
@@ -87,19 +87,21 @@ func main() {
 		}
 
 		if len(res.Quotes) == 0 {
-			fmt.Printf("%-8s %14s %12s %9s %-10s %s\n",
-				s, "-", "-", "-", "NO ROUTE", strings.Join(res.Notes, "; "))
+			fmt.Printf("%-8s %14s %12s %9s %-10s %-11s %s\n",
+				s, "-", "-", "-", "-", res.Integrity.String(),
+				strings.Join(res.Notes, "; "))
 			continue
 		}
 
 		priced++
 		q := res.Quotes[0]
-		fmt.Printf("%-8s %14s %12s %9s %-10s %s\n",
+		fmt.Printf("%-8s %14s %12s %9s %-10s %-11s %s\n",
 			s,
 			q.ReceiveAmount.StringFixed(2),
 			q.EffectiveRate.StringFixed(2),
 			q.LossPct.StringFixed(2),
 			q.Verdict.String(),
+			res.Integrity.String(),
 			q.Description,
 		)
 		for _, w := range q.Warnings {

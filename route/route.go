@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -105,6 +106,70 @@ func verdictFor(lossPct decimal.Decimal) Verdict {
 	default:
 		return VerdictUnusable
 	}
+}
+
+// Integrity describes the structural state of a corridor, which is a
+// different question from how good its pricing is.
+//
+// # Why this is not another verdict
+//
+// The verdict scale grades a loss percentage. That works only when there is a
+// price to grade, and the sister-corridor sweep of 2026-08-08 found two
+// corridors where there is not — or where the price means something other
+// than it appears to.
+//
+// KESC returned zero paths at every size from 0.1 to 5000 USDC. There is no
+// loss percentage to compute, because there is no execution to measure.
+// Reporting that as "Unusable" would put it in the same bucket as a corridor
+// that prices continuously and prices badly, which is a materially different
+// situation for anyone deciding whether to build on it.
+//
+// GHSC priced at every size, but every path at every size ran through NGNC:
+// USDC -> XLM -> NGNC -> GHSC. It has no independent market. Its integrity is
+// therefore bounded above by NGNC's, and any statement about GHSC that does
+// not mention NGNC is incomplete. A loss figure alone hides that dependency
+// entirely.
+//
+// So integrity is carried alongside the verdict rather than folded into it.
+// Collapsing the two discards the reason a corridor failed, and the reason is
+// the useful part.
+type Integrity int
+
+const (
+	// IntegrityUnknown means the corridor's structure was not established,
+	// normally because pricing failed for an unrelated reason.
+	IntegrityUnknown Integrity = iota
+
+	// IntegrityDirect means an independent market exists: at least one path
+	// reaches the destination without routing through another fiat token.
+	IntegrityDirect
+
+	// IntegrityDerivative means every available path traverses another
+	// fiat-pegged token, so the corridor inherits that token's liquidity and
+	// failure modes on top of its own. DependsOn names what it depends on.
+	IntegrityDerivative
+
+	// IntegrityNoMarket means no path exists at all. This is the absence of
+	// a price, not a bad one.
+	IntegrityNoMarket
+)
+
+func (i Integrity) String() string {
+	switch i {
+	case IntegrityDirect:
+		return "DIRECT"
+	case IntegrityDerivative:
+		return "DERIVATIVE"
+	case IntegrityNoMarket:
+		return "NO-MARKET"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// Priceable reports whether the corridor has a market to measure at all.
+func (i Integrity) Priceable() bool {
+	return i == IntegrityDirect || i == IntegrityDerivative
 }
 
 // Kind identifies how a route delivers value.
@@ -218,6 +283,15 @@ type Result struct {
 	ReferenceSource string
 	ReferenceAsOf   time.Time
 
+	// Integrity is the corridor's structural state, independent of pricing.
+	// A caller that reports only Quotes and Recommended will silently
+	// misrepresent a no-market or derivative corridor.
+	Integrity Integrity
+
+	// DependsOn names the fiat tokens every path traverses, when Integrity
+	// is IntegrityDerivative. Empty otherwise.
+	DependsOn []asset.Asset
+
 	// Notes record corridor-level facts that no single quote captures.
 	Notes []string
 }
@@ -257,11 +331,32 @@ func (e *Engine) Quote(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	if e.DEX != nil {
-		if q, err := e.quoteDEX(ctx, req, ref); err != nil {
+		d, err := e.quoteDEX(ctx, req, ref)
+		switch {
+		case err != nil:
 			res.Notes = append(res.Notes, "DEX route unavailable: "+err.Error())
-		} else {
-			res.Quotes = append(res.Quotes, *q)
+		default:
+			res.Integrity = d.integrity
+			res.DependsOn = d.dependsOn
+			if d.quote != nil {
+				res.Quotes = append(res.Quotes, *d.quote)
+			}
 		}
+	}
+
+	switch res.Integrity {
+	case IntegrityNoMarket:
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"No market: Horizon returned no path from %s to %s at this size. "+
+				"This is the absence of a price, not a bad one.",
+			req.SendAsset.Code, req.ReceiveAsset.Code))
+	case IntegrityDerivative:
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"Derivative corridor: every available path to %s routes through %s. "+
+				"There is no independent market, so this corridor carries %s's "+
+				"liquidity and failure modes in addition to its own.",
+			req.ReceiveAsset.Code, describeAssets(res.DependsOn),
+			describeAssets(res.DependsOn)))
 	}
 
 	sort.SliceStable(res.Quotes, func(i, j int) bool {
@@ -282,17 +377,97 @@ func (e *Engine) Quote(ctx context.Context, req Request) (*Result, error) {
 				"not recommended.",
 			len(res.Quotes), res.Quotes[0].LossPct.StringFixed(1), ref.Source))
 	}
-	if len(res.Quotes) == 0 {
+	// The no-market note already explains an empty result more precisely, so
+	// this covers only the other ways pricing can come back empty.
+	if len(res.Quotes) == 0 && res.Integrity != IntegrityNoMarket {
 		res.Notes = append(res.Notes, "No route could be priced for this corridor.")
 	}
 	return res, nil
 }
 
-// quoteDEX prices the on-chain leg via Horizon pathfinding.
-func (e *Engine) quoteDEX(ctx context.Context, req Request, ref refrate.Rate) (*Quote, error) {
-	best, err := e.DEX.BestPath(ctx, req.SendAsset, req.SendAmount, req.ReceiveAsset)
+// dexResult carries the corridor's structure alongside its price. Both come
+// from the same set of paths, and separating the calls would risk classifying
+// one snapshot of the market while pricing another.
+type dexResult struct {
+	quote     *Quote
+	integrity Integrity
+	dependsOn []asset.Asset
+}
+
+// describeAssets renders a list of assets for a human-readable note.
+func describeAssets(as []asset.Asset) string {
+	if len(as) == 0 {
+		return "another fiat token"
+	}
+	codes := make([]string, len(as))
+	for i, a := range as {
+		codes[i] = a.Code
+	}
+	return strings.Join(codes, " and ")
+}
+
+// classify determines corridor integrity from the complete set of paths.
+//
+// The claim "reachable only through another fiat token" is about every path,
+// not the best one, so this examines all of them: a single path that avoids
+// fiat intermediaries is enough to prove an independent market exists.
+func classify(paths []dex.Path, dest asset.Asset) (Integrity, []asset.Asset) {
+	if len(paths) == 0 {
+		return IntegrityNoMarket, nil
+	}
+
+	seen := map[string]asset.Asset{}
+	independent := false
+
+	for _, p := range paths {
+		fiatHops := 0
+		for _, h := range p.Hops {
+			// The destination appearing as its own hop is not a dependency.
+			if h.Code == dest.Code && h.Issuer == dest.Issuer {
+				continue
+			}
+			if asset.IsFiatToken(h) {
+				fiatHops++
+				seen[h.Code+":"+h.Issuer] = h
+			}
+		}
+		if fiatHops == 0 {
+			independent = true
+		}
+	}
+
+	if independent {
+		return IntegrityDirect, nil
+	}
+
+	deps := make([]asset.Asset, 0, len(seen))
+	for _, a := range seen {
+		deps = append(deps, a)
+	}
+	sort.Slice(deps, func(i, j int) bool { return deps[i].Code < deps[j].Code })
+	return IntegrityDerivative, deps
+}
+
+// quoteDEX prices the on-chain leg via Horizon pathfinding, and classifies
+// the corridor's structure from the same set of paths.
+func (e *Engine) quoteDEX(ctx context.Context, req Request, ref refrate.Rate) (*dexResult, error) {
+	paths, err := e.DEX.StrictSendPaths(ctx, req.SendAsset, req.SendAmount, req.ReceiveAsset)
 	if err != nil {
 		return nil, err
+	}
+
+	integrity, dependsOn := classify(paths, req.ReceiveAsset)
+	if integrity == IntegrityNoMarket {
+		return &dexResult{integrity: integrity}, nil
+	}
+
+	// Horizon generally returns its best path first, but that is not a
+	// documented guarantee, so the maximum is selected explicitly.
+	best := paths[0]
+	for _, p := range paths[1:] {
+		if p.DestAmount.GreaterThan(best.DestAmount) {
+			best = p
+		}
 	}
 
 	q := &Quote{
@@ -312,9 +487,23 @@ func (e *Engine) quoteDEX(ctx context.Context, req Request, ref refrate.Rate) (*
 	// two different products, and the redemption step has its own cost
 	// that this figure does not include.
 	if req.ReceiveAsset.Kind == asset.KindStellar {
+		payout := "fiat"
+		if peg, ok := asset.FiatPeg(req.ReceiveAsset); ok {
+			payout = peg
+		}
 		q.Warnings = append(q.Warnings, fmt.Sprintf(
-			"delivers %s tokens, not naira in a bank account; redeeming to fiat is a separate step with its own cost",
-			req.ReceiveAsset.Code))
+			"delivers %s tokens, not %s in a bank account; redeeming to fiat is a separate step with its own cost",
+			req.ReceiveAsset.Code, payout))
+	}
+
+	// A derivative corridor's price is not its own. Carrying this on the
+	// quote as well as the result means a caller rendering a single route
+	// cannot present the number without the dependency attached to it.
+	if integrity == IntegrityDerivative {
+		q.Warnings = append(q.Warnings, fmt.Sprintf(
+			"derivative corridor: every path routes through %s, so this rate "+
+				"compounds %s's loss with this corridor's own",
+			describeAssets(dependsOn), describeAssets(dependsOn)))
 	}
 
 	probe := e.ProbeAmount
@@ -330,5 +519,5 @@ func (e *Engine) quoteDEX(ctx context.Context, req Request, ref refrate.Rate) (*
 			}
 		}
 	}
-	return q, nil
+	return &dexResult{quote: q, integrity: integrity, dependsOn: dependsOn}, nil
 }

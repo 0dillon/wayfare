@@ -59,6 +59,41 @@ func GHSC() Asset { return Stellar("GHSC", LinkIOIssuer) }
 // declares it status="pending" — not in service.
 func KESC() Asset { return Stellar("KESC", LinkIOIssuer) }
 
+// fiatPegs records which Stellar tokens claim to track an off-chain currency,
+// and which one.
+//
+// This is what makes a derivative corridor detectable. A path hopping through
+// XLM is using a bridge asset; a path hopping through NGNC is inheriting
+// another fiat token's peg, its liquidity and its failure modes. The two look
+// identical in a Horizon path record and mean entirely different things.
+//
+// Entries are added only after the peg is read from the issuer's own
+// stellar.toml, the same standard applied to issuer accounts.
+var fiatPegs = map[string]string{
+	"NGNC:" + LinkIOIssuer: "NGN",
+	"GHSC:" + LinkIOIssuer: "GHS",
+	"KESC:" + LinkIOIssuer: "KES",
+}
+
+// FiatPeg reports the ISO-4217 currency a Stellar token claims to track, and
+// whether the token is a known fiat-pegged asset at all.
+//
+// An unknown token reports false rather than guessing from its code. "NGNC"
+// from an unrecognised issuer is not assumed to track the naira.
+func FiatPeg(a Asset) (string, bool) {
+	if a.Kind != KindStellar || a.Issuer == "" {
+		return "", false
+	}
+	peg, ok := fiatPegs[a.Code+":"+a.Issuer]
+	return peg, ok
+}
+
+// IsFiatToken reports whether a is a known fiat-pegged Stellar token.
+func IsFiatToken(a Asset) bool {
+	_, ok := FiatPeg(a)
+	return ok
+}
+
 // NGN is off-chain naira — what actually lands in a recipient's bank account.
 func NGN() Asset { return Fiat("NGN") }
 

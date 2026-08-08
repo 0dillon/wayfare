@@ -177,6 +177,9 @@ func TestGoodRouteIsRecommended(t *testing.T) {
 
 // TestTokenDeliveryIsDisclosed ensures the user is told the on-chain leg ends
 // in NGNC rather than naira in a bank account.
+//
+// The payout currency is named from the token's registered peg rather than
+// hardcoded, so the same disclosure is correct on a GHS or KES corridor.
 func TestTokenDeliveryIsDisclosed(t *testing.T) {
 	srv := horizonStub(t, liveStrictSendResponse)
 	defer srv.Close()
@@ -188,7 +191,7 @@ func TestTokenDeliveryIsDisclosed(t *testing.T) {
 	}
 
 	warnings := strings.Join(res.Quotes[0].Warnings, " ")
-	if !strings.Contains(warnings, "not naira in a bank account") {
+	if !strings.Contains(warnings, "delivers NGNC tokens, not NGN in a bank account") {
 		t.Errorf("expected a token-delivery warning, got: %v", res.Quotes[0].Warnings)
 	}
 }
@@ -263,5 +266,226 @@ func TestNoPathsProducesNoQuotes(t *testing.T) {
 	}
 	if len(res.Notes) == 0 {
 		t.Error("expected a note explaining that nothing could be priced")
+	}
+}
+
+// integrity taxonomy -----------------------------------------------------------
+
+// kescEmptyResponse is what Horizon returned for USDC -> KESC on 2026-08-08,
+// at every size from 0.1 to 5000: no records at all.
+const kescEmptyResponse = `{"_embedded":{"records":[]}}`
+
+// ghscViaNGNCResponse reproduces the shape measured for USDC -> GHSC on
+// 2026-08-08. Every path routes through NGNC; none reaches GHSC independently.
+const ghscViaNGNCResponse = `{
+  "_embedded": {
+    "records": [
+      {
+        "source_asset_type": "credit_alphanum4",
+        "source_asset_code": "USDC",
+        "source_amount": "100.0000000",
+        "destination_asset_type": "credit_alphanum4",
+        "destination_asset_code": "GHSC",
+        "destination_amount": "155.5600000",
+        "path": [
+          { "asset_type": "native" },
+          { "asset_type": "credit_alphanum4", "asset_code": "NGNC",
+            "asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6" }
+        ]
+      },
+      {
+        "source_asset_type": "credit_alphanum4",
+        "source_asset_code": "USDC",
+        "source_amount": "100.0000000",
+        "destination_asset_type": "credit_alphanum4",
+        "destination_asset_code": "GHSC",
+        "destination_amount": "150.0000000",
+        "path": [
+          { "asset_type": "credit_alphanum4", "asset_code": "NGNC",
+            "asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6" }
+        ]
+      }
+    ]
+  }
+}`
+
+func ghsRequest(amount string) Request {
+	return Request{
+		SendAsset:      asset.USDC(),
+		SendAmount:     decimal.RequireFromString(amount),
+		ReceiveAsset:   asset.GHSC(),
+		ReferenceBase:  "USD",
+		ReferenceQuote: "GHS",
+	}
+}
+
+// TestNoMarketIsDistinctFromUnusable is the KESC case.
+//
+// Zero paths at any size is the absence of a price, not a bad price. Grading
+// it Unusable would file it alongside a corridor that prices continuously and
+// prices badly — a materially different situation for anyone deciding whether
+// to build on it.
+func TestNoMarketIsDistinctFromUnusable(t *testing.T) {
+	srv := horizonStub(t, kescEmptyResponse)
+	defer srv.Close()
+
+	e := &Engine{DEX: &dex.Client{HorizonURL: srv.URL}, RefRate: usdToNGN("1500")}
+	res, err := e.Quote(context.Background(), ngnRequest("100"))
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+
+	if res.Integrity != IntegrityNoMarket {
+		t.Errorf("Integrity = %s, want NO-MARKET", res.Integrity)
+	}
+	if res.Integrity.Priceable() {
+		t.Error("a corridor with no paths must not report as priceable")
+	}
+	if len(res.Quotes) != 0 {
+		t.Errorf("expected no quotes, got %d", len(res.Quotes))
+	}
+	if res.Recommended != nil {
+		t.Error("Recommended must be nil when there is no market")
+	}
+
+	joined := strings.Join(res.Notes, " ")
+	if !strings.Contains(joined, "No market") {
+		t.Errorf("expected the note to name the no-market state, got: %v", res.Notes)
+	}
+	if !strings.Contains(joined, "absence of a price") {
+		t.Errorf("expected the note to distinguish absence from bad pricing, got: %v", res.Notes)
+	}
+}
+
+// TestDerivativeCorridorIsFlagged is the GHSC case: priced at every size, but
+// every path traverses NGNC, so the corridor has no independent market and
+// inherits NGNC's failure modes on top of its own.
+func TestDerivativeCorridorIsFlagged(t *testing.T) {
+	srv := horizonStub(t, ghscViaNGNCResponse)
+	defer srv.Close()
+
+	e := &Engine{
+		DEX: &dex.Client{HorizonURL: srv.URL},
+		RefRate: refrate.NewStatic(map[string]decimal.Decimal{
+			"USD/GHS": decimal.RequireFromString("11.7625"),
+		}),
+	}
+	res, err := e.Quote(context.Background(), ghsRequest("100"))
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+
+	if res.Integrity != IntegrityDerivative {
+		t.Fatalf("Integrity = %s, want DERIVATIVE", res.Integrity)
+	}
+	if !res.Integrity.Priceable() {
+		t.Error("a derivative corridor still has a price and must report as priceable")
+	}
+
+	if len(res.DependsOn) != 1 || res.DependsOn[0].Code != "NGNC" {
+		t.Errorf("DependsOn = %v, want exactly NGNC", res.DependsOn)
+	}
+
+	joined := strings.Join(res.Notes, " ")
+	if !strings.Contains(joined, "Derivative corridor") {
+		t.Errorf("expected a derivative note, got: %v", res.Notes)
+	}
+	if !strings.Contains(joined, "NGNC") {
+		t.Errorf("expected the note to name the dependency, got: %v", res.Notes)
+	}
+
+	// The dependency must also ride on the quote itself. A caller rendering
+	// one route must not be able to show the rate without it.
+	warnings := strings.Join(res.Quotes[0].Warnings, " ")
+	if !strings.Contains(warnings, "derivative corridor") {
+		t.Errorf("expected the quote to carry the dependency warning, got: %v",
+			res.Quotes[0].Warnings)
+	}
+}
+
+// TestDirectCorridorIsNotDerivative is the control. The NGNC fixture routes
+// through XLM, which is a bridge asset and not a fiat token, so the corridor
+// is direct. Without this, a classifier that marked everything derivative
+// would pass the test above.
+func TestDirectCorridorIsNotDerivative(t *testing.T) {
+	srv := horizonStub(t, liveStrictSendResponse)
+	defer srv.Close()
+
+	e := &Engine{DEX: &dex.Client{HorizonURL: srv.URL}, RefRate: usdToNGN("1500")}
+	res, err := e.Quote(context.Background(), ngnRequest("100"))
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+
+	if res.Integrity != IntegrityDirect {
+		t.Errorf("Integrity = %s, want DIRECT (XLM is a bridge asset, not a fiat token)",
+			res.Integrity)
+	}
+	if len(res.DependsOn) != 0 {
+		t.Errorf("DependsOn = %v, want empty for a direct corridor", res.DependsOn)
+	}
+}
+
+// TestOneIndependentPathDefeatsDerivative pins the rule that the claim is
+// about every path, not the best one. If any path avoids fiat intermediaries,
+// an independent market exists and the corridor is not derivative — even
+// when the best-paying path happens to route through one.
+func TestOneIndependentPathDefeatsDerivative(t *testing.T) {
+	mixed := `{
+      "_embedded": {
+        "records": [
+          {
+            "source_asset_type": "credit_alphanum4", "source_asset_code": "USDC",
+            "source_amount": "100.0000000",
+            "destination_asset_type": "credit_alphanum4", "destination_asset_code": "GHSC",
+            "destination_amount": "900.0000000",
+            "path": [
+              { "asset_type": "credit_alphanum4", "asset_code": "NGNC",
+                "asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6" }
+            ]
+          },
+          {
+            "source_asset_type": "credit_alphanum4", "source_asset_code": "USDC",
+            "source_amount": "100.0000000",
+            "destination_asset_type": "credit_alphanum4", "destination_asset_code": "GHSC",
+            "destination_amount": "800.0000000",
+            "path": [ { "asset_type": "native" } ]
+          }
+        ]
+      }
+    }`
+	srv := horizonStub(t, mixed)
+	defer srv.Close()
+
+	e := &Engine{
+		DEX: &dex.Client{HorizonURL: srv.URL},
+		RefRate: refrate.NewStatic(map[string]decimal.Decimal{
+			"USD/GHS": decimal.RequireFromString("11.7625"),
+		}),
+	}
+	res, err := e.Quote(context.Background(), ghsRequest("100"))
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+
+	if res.Integrity != IntegrityDirect {
+		t.Errorf("Integrity = %s, want DIRECT: the XLM path proves an independent market",
+			res.Integrity)
+	}
+}
+
+// TestUnknownIssuerIsNotTreatedAsFiat guards the registry lookup. A token
+// whose code matches a known fiat token but whose issuer does not must not
+// be credited with that peg — asset code alone never identifies an asset.
+func TestUnknownIssuerIsNotTreatedAsFiat(t *testing.T) {
+	impostor := asset.Stellar("NGNC", "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF5")
+	if asset.IsFiatToken(impostor) {
+		t.Error("a token from an unregistered issuer must not be treated as fiat-pegged")
+	}
+	if asset.IsFiatToken(asset.Native()) {
+		t.Error("XLM is a bridge asset, not a fiat token")
+	}
+	if !asset.IsFiatToken(asset.NGNC()) {
+		t.Error("the registered NGNC issuer must be recognised")
 	}
 }
