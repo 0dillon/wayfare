@@ -1,5 +1,10 @@
 package asset
 
+import (
+	"sort"
+	"strings"
+)
+
 // Verified mainnet issuers.
 //
 // Every issuer here was read from the issuer's own published stellar.toml
@@ -73,6 +78,36 @@ var fiatPegs = map[string]string{
 	"NGNC:" + LinkIOIssuer: "NGN",
 	"GHSC:" + LinkIOIssuer: "GHS",
 	"KESC:" + LinkIOIssuer: "KES",
+}
+
+// known indexes the verified tokens by code, for resolving a corridor named
+// in a request. Codes are unique here because every entry was verified
+// individually; this is a convenience over the verified set, not a namespace
+// in which asset codes are assumed unique in general.
+var known = map[string]Asset{
+	"USDC": USDC(),
+	"NGNC": NGNC(),
+	"GHSC": GHSC(),
+	"KESC": KESC(),
+}
+
+// Lookup resolves a verified token by its code.
+//
+// It returns false for anything not explicitly verified, so an unrecognised
+// code is an error rather than a guess at an issuer.
+func Lookup(code string) (Asset, bool) {
+	a, ok := known[strings.ToUpper(strings.TrimSpace(code))]
+	return a, ok
+}
+
+// KnownCodes lists the verified token codes, sorted.
+func KnownCodes() []string {
+	codes := make([]string, 0, len(known))
+	for c := range known {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	return codes
 }
 
 // FiatPeg reports the ISO-4217 currency a Stellar token claims to track, and

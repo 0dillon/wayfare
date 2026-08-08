@@ -1,0 +1,292 @@
+package route
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"sync"
+
+	"github.com/shopspring/decimal"
+
+	"github.com/Wayfare-labs/wayfare/asset"
+)
+
+// DefaultSizes is the ladder used when a caller does not specify one.
+//
+// It spans four orders of magnitude deliberately. The bottom rung exists to
+// isolate the structural floor: at 0.1 units price impact is negligible, so
+// whatever loss remains is the corridor's spread rather than its depth. The
+// top rung exists to expose exhaustion. A ladder covering only realistic
+// remittance sizes would show a bad number without showing which of the two
+// causes produced it.
+var DefaultSizes = []decimal.Decimal{
+	decimal.RequireFromString("0.1"),
+	decimal.NewFromInt(1),
+	decimal.NewFromInt(5),
+	decimal.NewFromInt(10),
+	decimal.NewFromInt(25),
+	decimal.NewFromInt(50),
+	decimal.NewFromInt(100),
+	decimal.NewFromInt(250),
+	decimal.NewFromInt(500),
+	decimal.NewFromInt(1000),
+	decimal.NewFromInt(2500),
+	decimal.NewFromInt(5000),
+}
+
+// ladderConcurrency bounds parallel pricing. Horizon is a shared public
+// service and a ladder is a burst of identical queries, so this stays low
+// enough to be a well-behaved client.
+const ladderConcurrency = 4
+
+// LadderRequest asks for one corridor priced across a range of sizes.
+type LadderRequest struct {
+	SendAsset    asset.Asset
+	ReceiveAsset asset.Asset
+
+	// Sizes are the send amounts to price. Empty means DefaultSizes.
+	Sizes []decimal.Decimal
+
+	ReferenceBase  string
+	ReferenceQuote string
+}
+
+// Rung is one size's result within a ladder.
+type Rung struct {
+	SendAmount decimal.Decimal
+	Result     *Result
+
+	// Err is set when this size alone failed to price, so one transient
+	// failure does not discard the whole ladder.
+	Err error
+}
+
+// Priced reports whether this rung produced a quote.
+func (r Rung) Priced() bool {
+	return r.Err == nil && r.Result != nil && len(r.Result.Quotes) > 0
+}
+
+// LadderResult is a corridor measured across sizes.
+type LadderResult struct {
+	Request LadderRequest
+	Rungs   []Rung
+
+	// Integrity is the corridor's structural state across the whole ladder,
+	// which can be stronger than any single rung's. A corridor with no path
+	// at one size might simply be too large for the pool; a corridor with no
+	// path at any size has no market at all.
+	Integrity Integrity
+	DependsOn []asset.Asset
+
+	ReferenceMid    decimal.Decimal
+	ReferenceSource string
+
+	// Floor is the loss percentage at the smallest size priced. It
+	// approximates the corridor's cost with price impact removed.
+	Floor decimal.Decimal
+
+	// FloorSize is the size Floor was measured at.
+	FloorSize decimal.Decimal
+
+	// WorstLoss and WorstSize record the other end of the curve.
+	WorstLoss decimal.Decimal
+	WorstSize decimal.Decimal
+
+	// Recommended is the best acceptable quote across every size, or nil
+	// when no size produced one. Nil is the common case on a broken
+	// corridor and must be rendered as "none", never as a best-effort pick.
+	Recommended *Quote
+
+	// RecommendedSize is the send amount Recommended was quoted at.
+	RecommendedSize decimal.Decimal
+
+	// Finding is a plain-language statement of what the ladder shows.
+	Finding string
+}
+
+// Viable reports whether any size produced a recommendable route.
+func (l *LadderResult) Viable() bool { return l.Recommended != nil }
+
+// Ladder prices a corridor at every size and summarises the curve.
+//
+// Individual sizes are priced concurrently but reported in ascending order,
+// so the output is deterministic regardless of which request returned first.
+func (e *Engine) Ladder(ctx context.Context, req LadderRequest) (*LadderResult, error) {
+	sizes := req.Sizes
+	if len(sizes) == 0 {
+		sizes = DefaultSizes
+	}
+	sorted := make([]decimal.Decimal, len(sizes))
+	copy(sorted, sizes)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].LessThan(sorted[j]) })
+
+	out := &LadderResult{
+		Request: req,
+		Rungs:   make([]Rung, len(sorted)),
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, ladderConcurrency)
+
+	for i, size := range sorted {
+		wg.Add(1)
+		go func(i int, size decimal.Decimal) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			res, err := e.Quote(ctx, Request{
+				SendAsset:      req.SendAsset,
+				SendAmount:     size,
+				ReceiveAsset:   req.ReceiveAsset,
+				ReferenceBase:  req.ReferenceBase,
+				ReferenceQuote: req.ReferenceQuote,
+			})
+			out.Rungs[i] = Rung{SendAmount: size, Result: res, Err: err}
+		}(i, size)
+	}
+	wg.Wait()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out.summarise()
+	return out, nil
+}
+
+// summarise derives the ladder-level facts from the individual rungs.
+func (l *LadderResult) summarise() {
+	var (
+		anyPriced   bool
+		anyDirect   bool
+		allNoMarket = true
+		deps        = map[string]asset.Asset{}
+		firstErr    error
+	)
+
+	for i := range l.Rungs {
+		r := l.Rungs[i]
+		if r.Err != nil {
+			if firstErr == nil {
+				firstErr = r.Err
+			}
+			// A rung that errored says nothing about market structure.
+			allNoMarket = false
+			continue
+		}
+		if r.Result == nil {
+			continue
+		}
+
+		if l.ReferenceMid.IsZero() {
+			l.ReferenceMid = r.Result.ReferenceMid
+			l.ReferenceSource = r.Result.ReferenceSource
+		}
+
+		switch r.Result.Integrity {
+		case IntegrityDirect:
+			anyDirect = true
+			allNoMarket = false
+		case IntegrityDerivative:
+			allNoMarket = false
+			for _, d := range r.Result.DependsOn {
+				deps[d.Code+":"+d.Issuer] = d
+			}
+		case IntegrityNoMarket:
+			// leaves allNoMarket intact
+		default:
+			allNoMarket = false
+		}
+
+		if !r.Priced() {
+			continue
+		}
+		anyPriced = true
+		q := r.Result.Quotes[0]
+
+		if l.FloorSize.IsZero() {
+			l.Floor, l.FloorSize = q.LossPct, r.SendAmount
+		}
+		if q.LossPct.GreaterThanOrEqual(l.WorstLoss) {
+			l.WorstLoss, l.WorstSize = q.LossPct, r.SendAmount
+		}
+
+		// The first acceptable quote on an ascending ladder is also the
+		// one at the smallest size, which is the honest one to surface:
+		// larger sizes on a thin corridor only get worse.
+		if l.Recommended == nil && r.Result.Recommended != nil {
+			l.Recommended = r.Result.Recommended
+			l.RecommendedSize = r.SendAmount
+		}
+	}
+
+	switch {
+	case allNoMarket && !anyPriced:
+		l.Integrity = IntegrityNoMarket
+	case anyDirect:
+		l.Integrity = IntegrityDirect
+	case len(deps) > 0:
+		l.Integrity = IntegrityDerivative
+		l.DependsOn = make([]asset.Asset, 0, len(deps))
+		for _, a := range deps {
+			l.DependsOn = append(l.DependsOn, a)
+		}
+		sort.Slice(l.DependsOn, func(i, j int) bool {
+			return l.DependsOn[i].Code < l.DependsOn[j].Code
+		})
+	default:
+		l.Integrity = IntegrityUnknown
+	}
+
+	l.Finding = l.finding(anyPriced, firstErr)
+}
+
+// finding states what the ladder shows, in the terms a reader needs.
+//
+// Every branch here describes a measurement. None of them recommends, and the
+// no-market and derivative cases are never folded into a loss percentage,
+// because the whole point of the taxonomy is that those are different results.
+func (l *LadderResult) finding(anyPriced bool, firstErr error) string {
+	send, recv := l.Request.SendAsset.Code, l.Request.ReceiveAsset.Code
+
+	if l.Integrity == IntegrityNoMarket {
+		return fmt.Sprintf(
+			"No market. Horizon returned no path from %s to %s at any of the %d "+
+				"sizes tested. This is the absence of a price, not a bad price: "+
+				"the corridor cannot be executed at all.",
+			send, recv, len(l.Rungs))
+	}
+
+	if !anyPriced {
+		if firstErr != nil {
+			return fmt.Sprintf("Could not price %s to %s: %v", send, recv, firstErr)
+		}
+		return fmt.Sprintf("Could not price %s to %s at any size tested.", send, recv)
+	}
+
+	var prefix string
+	if l.Integrity == IntegrityDerivative {
+		prefix = fmt.Sprintf(
+			"Derivative corridor: every path from %s to %s routes through %s, so "+
+				"%s has no independent market and these figures compound %s's cost "+
+				"with its own. ",
+			send, recv, describeAssets(l.DependsOn), recv, describeAssets(l.DependsOn))
+	}
+
+	if l.Viable() {
+		return prefix + fmt.Sprintf(
+			"Best available: %s%% below the %s mid at %s %s, graded %s. "+
+				"Loss reaches %s%% at %s %s.",
+			l.Recommended.LossPct.StringFixed(2), l.ReferenceSource,
+			l.RecommendedSize, send, l.Recommended.Verdict,
+			l.WorstLoss.StringFixed(2), l.WorstSize, send)
+	}
+
+	return prefix + fmt.Sprintf(
+		"No usable size. Loss against the %s mid is %s%% at %s %s — where price "+
+			"impact is negligible, so that is the corridor's structural floor, not "+
+			"a depth effect — rising to %s%% at %s %s. Every size tested is graded "+
+			"Unusable, so nothing is recommended.",
+		l.ReferenceSource, l.Floor.StringFixed(2), l.FloorSize, send,
+		l.WorstLoss.StringFixed(2), l.WorstSize, send)
+}
