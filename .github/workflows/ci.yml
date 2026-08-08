@@ -51,6 +51,12 @@ jobs:
           go-version: "1.22"
           cache: true
 
-      - uses: golangci/golangci-lint-action@v6
+      # v7 of the action is the first that installs golangci-lint v2, which
+      # is the schema .golangci.yml is written against. v6 installs the v1
+      # line and rejects the config outright.
+      #
+      # The version is pinned rather than tracking latest so the binary and
+      # the config cannot drift apart again without someone choosing to.
+      - uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.1.6
