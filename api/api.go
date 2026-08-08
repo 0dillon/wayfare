@@ -1,14 +1,8 @@
 // Package api serves the corridor monitor over HTTP.
 //
-// The wire types here are declared explicitly rather than by marshalling the
-// engine's own structs. A JSON contract that tracks internal field names
-// changes whenever the internals do, and the fields that matter most on this
-// endpoint — the integrity state, and the null recommendation on a broken
-// corridor — are exactly the ones a client must be able to rely on.
-//
-// Money crosses the wire as decimal strings. Serialising a rate as a JSON
-// number invites a client to parse it into a float64, which is the same
-// rounding bug this project refuses internally.
+// The wire shape for a measured corridor lives in package route
+// (route.CorridorJSON / route.ToCorridorJSON) so that this HTTP handler and
+// cmd/ladder's -json mode emit identical JSON from the same conversion code.
 package api
 
 import (
@@ -52,140 +46,6 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// wire types -----------------------------------------------------------------
-
-type quoteJSON struct {
-	Description   string   `json:"description"`
-	Source        string   `json:"source"`
-	ReceiveAmount string   `json:"receive_amount"`
-	EffectiveRate string   `json:"effective_rate"`
-	LossPct       string   `json:"loss_pct"`
-	LossAmount    string   `json:"loss_amount"`
-	Verdict       string   `json:"verdict"`
-	Warnings      []string `json:"warnings"`
-}
-
-type rungJSON struct {
-	SendAmount string     `json:"send_amount"`
-	Priced     bool       `json:"priced"`
-	Integrity  string     `json:"integrity"`
-	Quote      *quoteJSON `json:"quote"`
-	Notes      []string   `json:"notes"`
-	Error      string     `json:"error,omitempty"`
-}
-
-type corridorJSON struct {
-	SendAsset    assetJSON `json:"send_asset"`
-	ReceiveAsset assetJSON `json:"receive_asset"`
-
-	// Integrity is DIRECT, DERIVATIVE, NO-MARKET or UNKNOWN. A client that
-	// renders only the loss curve will misreport the last two.
-	Integrity string      `json:"integrity"`
-	DependsOn []assetJSON `json:"depends_on"`
-
-	ReferenceMid    string `json:"reference_mid"`
-	ReferenceSource string `json:"reference_source"`
-	ReferencePair   string `json:"reference_pair"`
-
-	Floor     string `json:"floor_loss_pct"`
-	FloorSize string `json:"floor_size"`
-	WorstLoss string `json:"worst_loss_pct"`
-	WorstSize string `json:"worst_size"`
-
-	// Recommended is null when no size produced an acceptable route, which
-	// is the normal outcome on a broken corridor. Clients must render null
-	// as "none", never fall back to the best-scoring quote.
-	Recommended     *quoteJSON `json:"recommended"`
-	RecommendedSize string     `json:"recommended_size,omitempty"`
-
-	Finding    string     `json:"finding"`
-	Rungs      []rungJSON `json:"rungs"`
-	MeasuredAt string     `json:"measured_at"`
-}
-
-type assetJSON struct {
-	Code   string `json:"code"`
-	Issuer string `json:"issuer,omitempty"`
-	Peg    string `json:"peg,omitempty"`
-}
-
-func toAssetJSON(a asset.Asset) assetJSON {
-	j := assetJSON{Code: a.Code, Issuer: a.Issuer}
-	if peg, ok := asset.FiatPeg(a); ok {
-		j.Peg = peg
-	}
-	return j
-}
-
-func toQuoteJSON(q *route.Quote) *quoteJSON {
-	if q == nil {
-		return nil
-	}
-	w := q.Warnings
-	if w == nil {
-		w = []string{}
-	}
-	return &quoteJSON{
-		Description:   q.Description,
-		Source:        q.Source,
-		ReceiveAmount: q.ReceiveAmount.String(),
-		EffectiveRate: q.EffectiveRate.String(),
-		LossPct:       q.LossPct.StringFixed(2),
-		LossAmount:    q.LossAmount.StringFixed(2),
-		Verdict:       q.Verdict.String(),
-		Warnings:      w,
-	}
-}
-
-func toCorridorJSON(l *route.LadderResult, pair string) corridorJSON {
-	out := corridorJSON{
-		SendAsset:       toAssetJSON(l.Request.SendAsset),
-		ReceiveAsset:    toAssetJSON(l.Request.ReceiveAsset),
-		Integrity:       l.Integrity.String(),
-		DependsOn:       []assetJSON{},
-		ReferenceMid:    l.ReferenceMid.String(),
-		ReferenceSource: l.ReferenceSource,
-		ReferencePair:   pair,
-		Floor:           l.Floor.StringFixed(2),
-		FloorSize:       l.FloorSize.String(),
-		WorstLoss:       l.WorstLoss.StringFixed(2),
-		WorstSize:       l.WorstSize.String(),
-		Recommended:     toQuoteJSON(l.Recommended),
-		Finding:         l.Finding,
-		Rungs:           make([]rungJSON, 0, len(l.Rungs)),
-		MeasuredAt:      time.Now().UTC().Format(time.RFC3339),
-	}
-	if l.Recommended != nil {
-		out.RecommendedSize = l.RecommendedSize.String()
-	}
-	for _, d := range l.DependsOn {
-		out.DependsOn = append(out.DependsOn, toAssetJSON(d))
-	}
-
-	for _, r := range l.Rungs {
-		rj := rungJSON{
-			SendAmount: r.SendAmount.String(),
-			Priced:     r.Priced(),
-			Integrity:  route.IntegrityUnknown.String(),
-			Notes:      []string{},
-		}
-		if r.Err != nil {
-			rj.Error = r.Err.Error()
-		}
-		if r.Result != nil {
-			rj.Integrity = r.Result.Integrity.String()
-			if r.Result.Notes != nil {
-				rj.Notes = r.Result.Notes
-			}
-			if len(r.Result.Quotes) > 0 {
-				rj.Quote = toQuoteJSON(&r.Result.Quotes[0])
-			}
-		}
-		out.Rungs = append(out.Rungs, rj)
-	}
-	return out
-}
-
 // handlers -------------------------------------------------------------------
 
 func (s *Server) handleCorridor(w http.ResponseWriter, r *http.Request) {
@@ -212,9 +72,6 @@ func (s *Server) handleCorridor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The benchmark is the destination token's peg. A token with no
-	// verified peg has nothing to be scored against, and scoring it against
-	// a guess is precisely the failure this tool exists to catch.
 	pegQuote, ok := asset.FiatPeg(recvAsset)
 	if !ok {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(
@@ -224,7 +81,6 @@ func (s *Server) handleCorridor(w http.ResponseWriter, r *http.Request) {
 	}
 	pegBase, ok := asset.FiatPeg(sendAsset)
 	if !ok {
-		// USDC has no fiat peg entry; it is the dollar leg by construction.
 		pegBase = "USD"
 	}
 
@@ -253,19 +109,19 @@ func (s *Server) handleCorridor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, toCorridorJSON(res, pegBase+"/"+pegQuote))
+	writeJSON(w, http.StatusOK, route.ToCorridorJSON(res, pegBase+"/"+pegQuote))
 }
 
 func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	type entry struct {
-		assetJSON
+		route.AssetJSON
 		Corridor bool `json:"can_be_destination"`
 	}
 	out := make([]entry, 0)
 	for _, code := range asset.KnownCodes() {
 		a, _ := asset.Lookup(code)
 		_, hasPeg := asset.FiatPeg(a)
-		out = append(out, entry{assetJSON: toAssetJSON(a), Corridor: hasPeg})
+		out = append(out, entry{AssetJSON: route.ToAssetJSON(a), Corridor: hasPeg})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"assets": out})
 }
@@ -276,9 +132,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // helpers --------------------------------------------------------------------
 
-// maxSizes bounds a request's ladder. Each size is a separate round trip to
-// Horizon, so an unbounded list would let one request generate arbitrary load
-// on a shared public service.
 const maxSizes = 24
 
 func param(r *http.Request, key, fallback string) string {
@@ -288,8 +141,6 @@ func param(r *http.Request, key, fallback string) string {
 	return fallback
 }
 
-// parseSizes reads the optional sizes parameter. Empty means the default
-// ladder.
 func parseSizes(raw string) ([]decimal.Decimal, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
