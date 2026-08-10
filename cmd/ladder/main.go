@@ -185,4 +185,3 @@ func printTable(ctx context.Context, result *route.LadderResult, c corridor) {
 		fmt.Printf("no size could be priced for USDC -> %s\n", c.dest.Code)
 	}
 }
-
