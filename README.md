@@ -193,6 +193,11 @@ is the charitable direction for the corridors measured here.
 See [CONTRIBUTING.md](CONTRIBUTING.md). The invariants there are hard
 constraints, not style preferences.
 
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md) — how to report a vulnerability privately, and
+  what counts as one. A corridor being terrible is a measurement, not a bug;
+  a route looking better than it is, is the bug.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
