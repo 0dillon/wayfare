@@ -35,7 +35,39 @@ type Rate struct {
 	Mid    decimal.Decimal // units of Quote per one unit of Base
 	AsOf   time.Time
 	Source string // provider identity, surfaced so users can audit it
+
+	// Cross-check fields, populated by Cross when a second provider
+	// answered. Mid and Source above always name the rate that was scored
+	// against; these name the other one.
+	//
+	// Both are carried even when the providers agree. A corridor's figures
+	// moving because the benchmark changed is a different event from the
+	// corridor moving, and a record keeping only the mid it scored against
+	// cannot distinguish them afterwards.
+	SecondaryMid    decimal.Decimal
+	SecondarySource string
+	SecondaryAsOf   time.Time
+
+	// DivergencePct is how far apart the two mids are, relative to the
+	// smaller, so the figure does not depend on which is primary.
+	DivergencePct decimal.Decimal
+
+	// Agreement records how the two providers related. The zero value,
+	// AgreementSingle, is correct for a rate that was never cross-checked.
+	Agreement Agreement
+
+	// Note explains a non-trivial Agreement in prose, for surfaces that
+	// show a reason rather than a state.
+	Note string
 }
+
+// Scorable reports whether a verdict may be derived from this rate.
+//
+// False means the two providers disagreed so far apart that one of them is
+// broken rather than merely different. Scoring against either would produce a
+// figure whose value depends on which feed was believed, which is not a
+// measurement — see the threshold rationale in cross.go.
+func (r Rate) Scorable() bool { return r.Agreement != AgreementMalfunction }
 
 // Pair renders the currency pair, e.g. "USD/NGN".
 func (r Rate) Pair() string { return r.Base + "/" + r.Quote }

@@ -46,6 +46,20 @@ type CorridorJSON struct {
 	ReferenceSource string `json:"reference_source"`
 	ReferencePair   string `json:"reference_pair"`
 
+	// The cross-check between reference providers.
+	//
+	// ReferenceAgreement is AGREE, DISAGREE, STALE, MALFUNCTION or SINGLE.
+	// Scored is false when the providers disagreed so far apart that no
+	// verdict could honestly be derived from either; a client rendering the
+	// loss curve without checking it would show zeroes as though they were
+	// measurements.
+	ReferenceAgreement       string `json:"reference_agreement"`
+	ReferenceSecondaryMid    string `json:"reference_secondary_mid,omitempty"`
+	ReferenceSecondarySource string `json:"reference_secondary_source,omitempty"`
+	ReferenceDivergencePct   string `json:"reference_divergence_pct,omitempty"`
+	ReferenceNote            string `json:"reference_note,omitempty"`
+	Scored                   bool   `json:"scored"`
+
 	Floor     string `json:"floor_loss_pct"`
 	FloorSize string `json:"floor_size"`
 	WorstLoss string `json:"worst_loss_pct"`
@@ -95,22 +109,33 @@ func ToQuoteJSON(q *Quote) *QuoteJSON {
 
 func ToCorridorJSON(l *LadderResult, pair string) CorridorJSON {
 	out := CorridorJSON{
-		SendAsset:       ToAssetJSON(l.Request.SendAsset),
-		ReceiveAsset:    ToAssetJSON(l.Request.ReceiveAsset),
-		Integrity:       l.Integrity.String(),
-		DependsOn:       []AssetJSON{},
-		ReferenceMid:    l.ReferenceMid.String(),
-		ReferenceSource: l.ReferenceSource,
-		ReferencePair:   pair,
-		Floor:           l.Floor.StringFixed(2),
-		FloorSize:       l.FloorSize.String(),
-		WorstLoss:       l.WorstLoss.StringFixed(2),
-		WorstSize:       l.WorstSize.String(),
-		Recommended:     ToQuoteJSON(l.Recommended),
-		Finding:         l.Finding,
-		Rungs:           make([]RungJSON, 0, len(l.Rungs)),
-		MeasuredAt:      time.Now().UTC().Format(time.RFC3339),
+		SendAsset:          ToAssetJSON(l.Request.SendAsset),
+		ReceiveAsset:       ToAssetJSON(l.Request.ReceiveAsset),
+		Integrity:          l.Integrity.String(),
+		DependsOn:          []AssetJSON{},
+		ReferenceMid:       l.ReferenceMid.String(),
+		ReferenceSource:    l.ReferenceSource,
+		ReferencePair:      pair,
+		ReferenceAgreement: l.Reference.Agreement.String(),
+		ReferenceNote:      l.Reference.Note,
+		Scored:             l.Reference.Scorable(),
+		Floor:              l.Floor.StringFixed(2),
+		FloorSize:          l.FloorSize.String(),
+		WorstLoss:          l.WorstLoss.StringFixed(2),
+		WorstSize:          l.WorstSize.String(),
+		Recommended:        ToQuoteJSON(l.Recommended),
+		Finding:            l.Finding,
+		Rungs:              make([]RungJSON, 0, len(l.Rungs)),
+		MeasuredAt:         time.Now().UTC().Format(time.RFC3339),
 	}
+	if !l.Reference.SecondaryMid.IsZero() {
+		out.ReferenceSecondaryMid = l.Reference.SecondaryMid.String()
+		out.ReferenceSecondarySource = l.Reference.SecondarySource
+	}
+	if !l.Reference.DivergencePct.IsZero() {
+		out.ReferenceDivergencePct = l.Reference.DivergencePct.StringFixed(4)
+	}
+
 	if l.Recommended != nil {
 		out.RecommendedSize = l.RecommendedSize.String()
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/Wayfare-labs/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/refrate"
 )
 
 // DefaultSizes is the ladder used when a caller does not specify one.
@@ -80,6 +81,10 @@ type LadderResult struct {
 
 	ReferenceMid    decimal.Decimal
 	ReferenceSource string
+
+	// Reference carries the full benchmark, including the second
+	// provider's mid and how far the two diverged.
+	Reference refrate.Rate
 
 	// Floor is the loss percentage at the smallest size priced. It
 	// approximates the corridor's cost with price impact removed.
@@ -181,6 +186,7 @@ func (l *LadderResult) summarise() {
 		if l.ReferenceMid.IsZero() {
 			l.ReferenceMid = r.Result.ReferenceMid
 			l.ReferenceSource = r.Result.ReferenceSource
+			l.Reference = r.Result.Reference
 		}
 
 		switch r.Result.Integrity {
