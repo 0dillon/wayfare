@@ -36,6 +36,12 @@ type Recorder struct {
 	GitRevision string
 	Notes       []string
 
+	// Dirty marks a snapshot recorded from a modified working tree, where
+	// GitRevision names a tree that did not produce these bytes. It is
+	// carried into the manifest so the caveat lives in the artifact rather
+	// than only in the shell that made it.
+	Dirty bool
+
 	// Classify names the upstream a request went to. Nil uses a default that
 	// distinguishes Horizon by its paths.
 	Classify func(*http.Request) string
@@ -101,7 +107,11 @@ func (r *Recorder) add(req *http.Request, resp *http.Response, body []byte) {
 
 	if r.seen == nil {
 		r.seen = map[string]bool{}
-		r.started = time.Now().UTC()
+		// Truncated to the second because the directory name is derived
+		// from this value at second resolution. Keeping sub-second digits
+		// here would make a snapshot's own manifest disagree with the
+		// directory holding it.
+		r.started = time.Now().UTC().Truncate(time.Second)
 	}
 	key := Key(req.Method, req.URL)
 	if r.seen[key] {
@@ -122,7 +132,7 @@ func (r *Recorder) add(req *http.Request, resp *http.Response, body []byte) {
 		URL:         req.URL.String(),
 		Status:      resp.StatusCode,
 		ContentType: resp.Header.Get("Content-Type"),
-		RecordedAt:  time.Now().UTC(),
+		RecordedAt:  time.Now().UTC().Truncate(time.Second),
 		BodyFile:    fmt.Sprintf("%s/%03d-%s.json", responsesDir, seq, slugFor(req)),
 		BodySHA256:  bodyHash(body),
 	})
@@ -171,6 +181,21 @@ func DirName(c Corridor, at time.Time) string {
 	return c.Slug() + "-" + at.UTC().Format("20060102T150405Z")
 }
 
+// RecordedAt is the moment the first interaction was captured, which is the
+// manifest's recorded_at.
+//
+// Callers naming a directory must use this rather than reading the clock
+// again: the directory name and the manifest inside it are the same fact, and
+// a second clock read makes them disagree by however long the run took.
+func (r *Recorder) RecordedAt() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.started.IsZero() {
+		return time.Now().UTC().Truncate(time.Second)
+	}
+	return r.started
+}
+
 // Save writes the captured run to dir, creating it.
 //
 // It refuses to write into a directory that already holds a manifest: a
@@ -202,6 +227,7 @@ func (r *Recorder) Save(dir string) error {
 		Version:      Version,
 		RecordedAt:   r.started,
 		GitRevision:  r.GitRevision,
+		Dirty:        r.Dirty,
 		Corridor:     r.Corridor,
 		Sizes:        r.Sizes,
 		Sources:      r.Sources,

@@ -60,6 +60,8 @@ func main() {
 			"record upstream responses as a snapshot in a new directory under this parent")
 		refName = flag.String("ref", "exchangerate-api",
 			"reference rate provider: exchangerate-api or currency-api")
+		allowDirty = flag.Bool("allow-dirty", false,
+			"record even though the working tree is modified, marking the manifest dirty")
 	)
 	flag.Parse()
 
@@ -90,7 +92,13 @@ func main() {
 	dexClient := &dex.Client{}
 
 	if *record != "" {
+		dirty, err := requireCleanTree(*allowDirty)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 		recorder = &snapshot.Recorder{
+			Dirty: dirty,
 			Corridor: snapshot.Corridor{
 				Send:          snapshot.AssetRef{Code: asset.USDC().Code, Issuer: asset.USDC().Issuer},
 				Receive:       snapshot.AssetRef{Code: c.dest.Code, Issuer: c.dest.Issuer},
@@ -149,7 +157,7 @@ func main() {
 				len(failed), len(result.Rungs), strings.Join(failed, ", "))
 			os.Exit(1)
 		}
-		dir := filepath.Join(*record, snapshot.DirName(recorder.Corridor, time.Now()))
+		dir := filepath.Join(*record, snapshot.DirName(recorder.Corridor, recorder.RecordedAt()))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "creating snapshot directory: %v\n", err)
 			os.Exit(1)
@@ -254,6 +262,65 @@ func gitRevision() string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// dirtyFiles lists tracked files modified relative to HEAD.
+//
+// An empty result with a nil error means a clean tree; a nil result with an
+// error means git could not answer, which is not the same thing and must not
+// be reported as clean.
+func dirtyFiles() ([]string, error) {
+	out, err := exec.Command("git", "status", "--porcelain", "--untracked-files=no").Output()
+	if err != nil {
+		return nil, fmt.Errorf("could not determine whether the tree is clean: %w", err)
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// requireCleanTree refuses to record a snapshot from a modified working tree.
+//
+// git_revision is the only link between a committed fixture and the code that
+// produced it. Recorded from a dirty tree it names a revision that did not
+// generate the bytes — which is worse than recording nothing, because the
+// field looks like provenance and is consulted as though it were.
+//
+// This repository already contains the failure: the GHSC and KESC snapshots
+// recorded revision e2be414, a commit predating the snapshot package that
+// wrote them. Both were re-captured once this check existed.
+//
+// -allow-dirty exists for local experiments and marks the manifest, so a
+// snapshot whose provenance is approximate says so in the artifact rather
+// than only in the shell that made it.
+func requireCleanTree(allowDirty bool) (dirty bool, err error) {
+	files, err := dirtyFiles()
+	if err != nil {
+		// Not in a git checkout, or git is unavailable. Recording is still
+		// possible; the revision is simply absent, which the manifest
+		// represents honestly.
+		return false, nil
+	}
+	if len(files) == 0 {
+		return false, nil
+	}
+	if allowDirty {
+		fmt.Fprintf(os.Stderr,
+			"warning: recording from a modified tree; manifest will be marked dirty:\n  %s\n",
+			strings.Join(files, "\n  "))
+		return true, nil
+	}
+	return false, fmt.Errorf(
+		"refusing to record a snapshot from a modified working tree.\n"+
+			"git_revision would name a tree that did not produce these bytes, and a\n"+
+			"fixture with approximate provenance is a fixture whose provenance is\n"+
+			"decorative. Commit or stash first, or pass -allow-dirty to record anyway\n"+
+			"and mark the manifest.\n\nModified:\n  %s",
+		strings.Join(files, "\n  "))
 }
 
 // printJSON writes the shared wire shape and nothing else to stdout, so

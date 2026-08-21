@@ -125,10 +125,16 @@ type Interaction struct {
 // and every figure a consumer reports must come from reparsing the recorded
 // bodies — that is the whole point of keeping them.
 type Manifest struct {
-	Format       string        `json:"format"`
-	Version      int           `json:"version"`
-	RecordedAt   time.Time     `json:"recorded_at"`
-	GitRevision  string        `json:"git_revision,omitempty"`
+	Format      string    `json:"format"`
+	Version     int       `json:"version"`
+	RecordedAt  time.Time `json:"recorded_at"`
+	GitRevision string    `json:"git_revision,omitempty"`
+
+	// Dirty is true when the recording tree had uncommitted changes, so
+	// GitRevision is approximate. Absent means the tree was clean; a
+	// consumer treating a dirty snapshot as authoritative provenance is
+	// reading a field that says otherwise.
+	Dirty        bool          `json:"dirty,omitempty"`
 	Corridor     Corridor      `json:"corridor"`
 	Sizes        []string      `json:"sizes"`
 	Sources      Sources       `json:"sources"`
