@@ -7,17 +7,17 @@
         "source_asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
         "source_amount": "25.0000000",
         "destination_asset_type": "credit_alphanum4",
-        "destination_asset_code": "NGNC",
+        "destination_asset_code": "GHSC",
         "destination_asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6",
-        "destination_amount": "21183.8476737",
+        "destination_amount": "59.0328923",
         "path": [
           {
-            "asset_type": "credit_alphanum12",
-            "asset_code": "EURMTL",
-            "asset_issuer": "GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V"
+            "asset_type": "native"
           },
           {
-            "asset_type": "native"
+            "asset_type": "credit_alphanum4",
+            "asset_code": "NGNC",
+            "asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6"
           }
         ]
       },
@@ -27,25 +27,16 @@
         "source_asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
         "source_amount": "25.0000000",
         "destination_asset_type": "credit_alphanum4",
-        "destination_asset_code": "NGNC",
+        "destination_asset_code": "GHSC",
         "destination_asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6",
-        "destination_amount": "21183.8260124",
+        "destination_amount": "35.9735196",
         "path": [
           {
-            "asset_type": "native"
+            "asset_type": "credit_alphanum4",
+            "asset_code": "NGNC",
+            "asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6"
           }
         ]
-      },
-      {
-        "source_asset_type": "credit_alphanum4",
-        "source_asset_code": "USDC",
-        "source_asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-        "source_amount": "25.0000000",
-        "destination_asset_type": "credit_alphanum4",
-        "destination_asset_code": "NGNC",
-        "destination_asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6",
-        "destination_amount": "12634.6353456",
-        "path": []
       }
     ]
   }

@@ -5,21 +5,19 @@
         "source_asset_type": "credit_alphanum4",
         "source_asset_code": "USDC",
         "source_asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-        "source_amount": "0.1000000",
+        "source_amount": "1.0000000",
         "destination_asset_type": "credit_alphanum4",
-        "destination_asset_code": "NGNC",
+        "destination_asset_code": "GHSC",
         "destination_asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6",
-        "destination_amount": "96.9529653",
+        "destination_amount": "2.8458772",
         "path": [
           {
-            "asset_type": "credit_alphanum4",
-            "asset_code": "BASH",
-            "asset_issuer": "GBQ42A3K32ZFOKGB3JJCDXJW7LNAS3GEPQM7J43KYCR7OKVIUON7D65N"
+            "asset_type": "native"
           },
           {
             "asset_type": "credit_alphanum4",
-            "asset_code": "AQUA",
-            "asset_issuer": "GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA"
+            "asset_code": "NGNC",
+            "asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6"
           }
         ]
       },
@@ -27,12 +25,18 @@
         "source_asset_type": "credit_alphanum4",
         "source_asset_code": "USDC",
         "source_asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-        "source_amount": "0.1000000",
+        "source_amount": "1.0000000",
         "destination_asset_type": "credit_alphanum4",
-        "destination_asset_code": "NGNC",
+        "destination_asset_code": "GHSC",
         "destination_asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6",
-        "destination_amount": "96.9458590",
-        "path": []
+        "destination_amount": "2.7693262",
+        "path": [
+          {
+            "asset_type": "credit_alphanum4",
+            "asset_code": "NGNC",
+            "asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6"
+          }
+        ]
       }
     ]
   }

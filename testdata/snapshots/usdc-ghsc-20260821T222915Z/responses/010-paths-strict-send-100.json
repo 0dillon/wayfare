@@ -5,14 +5,19 @@
         "source_asset_type": "credit_alphanum4",
         "source_asset_code": "USDC",
         "source_asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-        "source_amount": "250.0000000",
+        "source_amount": "100.0000000",
         "destination_asset_type": "credit_alphanum4",
-        "destination_asset_code": "NGNC",
+        "destination_asset_code": "GHSC",
         "destination_asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6",
-        "destination_amount": "101254.4915826",
+        "destination_amount": "154.2857994",
         "path": [
           {
             "asset_type": "native"
+          },
+          {
+            "asset_type": "credit_alphanum4",
+            "asset_code": "NGNC",
+            "asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6"
           }
         ]
       },
@@ -20,12 +25,18 @@
         "source_asset_type": "credit_alphanum4",
         "source_asset_code": "USDC",
         "source_asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-        "source_amount": "250.0000000",
+        "source_amount": "100.0000000",
         "destination_asset_type": "credit_alphanum4",
-        "destination_asset_code": "NGNC",
+        "destination_asset_code": "GHSC",
         "destination_asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6",
-        "destination_amount": "23724.6069830",
-        "path": []
+        "destination_amount": "57.5288381",
+        "path": [
+          {
+            "asset_type": "credit_alphanum4",
+            "asset_code": "NGNC",
+            "asset_issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6"
+          }
+        ]
       }
     ]
   }
