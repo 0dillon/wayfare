@@ -49,12 +49,19 @@ func (e *ExchangeRateAPI) baseURL() string {
 }
 
 // erAPIResponse is the subset of the upstream payload we rely on.
+//
+// Rates are held as raw JSON rather than float64 on purpose. Decoding a rate
+// into binary floating point and converting afterwards has already lost
+// digits by the time decimal sees it, and this particular number is the
+// denominator of every loss percentage the project publishes — a rounding
+// error here moves a corridor across a verdict boundary with nothing having
+// changed on-chain.
 type erAPIResponse struct {
-	Result             string             `json:"result"`
-	BaseCode           string             `json:"base_code"`
-	TimeLastUpdateUnix int64              `json:"time_last_update_unix"`
-	Rates              map[string]float64 `json:"rates"`
-	ErrorType          string             `json:"error-type"`
+	Result             string                     `json:"result"`
+	BaseCode           string                     `json:"base_code"`
+	TimeLastUpdateUnix int64                      `json:"time_last_update_unix"`
+	Rates              map[string]json.RawMessage `json:"rates"`
+	ErrorType          string                     `json:"error-type"`
 }
 
 // Rate implements Provider.
@@ -71,6 +78,9 @@ func (e *ExchangeRateAPI) Rate(ctx context.Context, base, quote string) (Rate, e
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return Rate{}, &ErrRateLimited{Source: e.Name(), RetryAfter: retryAfter(resp)}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return Rate{}, fmt.Errorf("refrate: %s returned HTTP %d", e.Name(), resp.StatusCode)
 	}
@@ -83,11 +93,18 @@ func (e *ExchangeRateAPI) Rate(ctx context.Context, base, quote string) (Rate, e
 		return Rate{}, fmt.Errorf("refrate: %s error: %s", e.Name(), body.ErrorType)
 	}
 
+	raw, ok := body.Rates[quote]
+	if !ok {
+		return Rate{}, &ErrNoRate{Base: base, Quote: quote, Source: e.Name()}
+	}
+	mid, err := decimal.NewFromString(string(raw))
+	if err != nil {
+		return Rate{}, fmt.Errorf("refrate: parsing %s/%s rate %q: %w", base, quote, raw, err)
+	}
 	// A rate of exactly zero is treated as absent rather than as a real
 	// quote. Taking it at face value would make the spread calculation
 	// divide by zero, or worse, report a route as infinitely good.
-	v, ok := body.Rates[quote]
-	if !ok || v == 0 {
+	if mid.IsZero() {
 		return Rate{}, &ErrNoRate{Base: base, Quote: quote, Source: e.Name()}
 	}
 
@@ -99,7 +116,7 @@ func (e *ExchangeRateAPI) Rate(ctx context.Context, base, quote string) (Rate, e
 	return Rate{
 		Base:   base,
 		Quote:  quote,
-		Mid:    decimal.NewFromFloat(v),
+		Mid:    mid,
 		AsOf:   asOf,
 		Source: e.Name(),
 	}, nil

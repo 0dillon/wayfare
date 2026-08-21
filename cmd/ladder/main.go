@@ -7,6 +7,12 @@
 //	go run ./cmd/ladder                  # USDC -> NGNC
 //	go run ./cmd/ladder -to GHSC         # USDC -> GHSC, benchmarked against GHS
 //	go run ./cmd/ladder -to GHSC -json   # same, as JSON on stdout
+//
+//	go run ./cmd/ladder -record testdata/snapshots   # also keep the bytes
+//
+// Recording is opt-in and writes the verbatim upstream responses to a new
+// directory under the given parent, named by the convention in
+// docs/snapshot-format.md.
 package main
 
 import (
@@ -14,7 +20,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,6 +33,7 @@ import (
 	"github.com/Wayfare-labs/wayfare/dex"
 	"github.com/Wayfare-labs/wayfare/refrate"
 	"github.com/Wayfare-labs/wayfare/route"
+	"github.com/Wayfare-labs/wayfare/snapshot"
 )
 
 // corridor names a destination token and the fiat currency it claims to track.
@@ -46,6 +56,10 @@ func main() {
 		sizesFlag = flag.String("sizes", "0.1,1,5,10,25,50,100,250,500,1000,2500,5000",
 			"comma-separated send amounts in USDC")
 		jsonOut = flag.Bool("json", false, "emit JSON on stdout instead of the text table")
+		record  = flag.String("record", "",
+			"record upstream responses as a snapshot in a new directory under this parent")
+		refName = flag.String("ref", "exchangerate-api",
+			"reference rate provider: exchangerate-api or currency-api")
 	)
 	flag.Parse()
 
@@ -61,9 +75,42 @@ func main() {
 		os.Exit(2)
 	}
 
+	// One HTTP client feeds both upstreams, so recording swaps a single
+	// transport rather than threading a flag through every caller.
+	var (
+		httpClient *http.Client
+		recorder   *snapshot.Recorder
+	)
+	ref, err := referenceProvider(*refName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	refProvider := ref.provider
+	dexClient := &dex.Client{}
+
+	if *record != "" {
+		recorder = &snapshot.Recorder{
+			Corridor: snapshot.Corridor{
+				Send:          snapshot.AssetRef{Code: asset.USDC().Code, Issuer: asset.USDC().Issuer},
+				Receive:       snapshot.AssetRef{Code: c.dest.Code, Issuer: c.dest.Issuer},
+				ReferencePair: "USD/" + c.refPair,
+			},
+			Sizes: sizeStrings(sizes),
+			Sources: snapshot.Sources{
+				Horizon:   snapshot.SourceRef{BaseURL: dex.DefaultHorizonURL},
+				Reference: snapshot.SourceRef{Provider: refProvider.Name(), BaseURL: ref.baseURL},
+			},
+			GitRevision: gitRevision(),
+		}
+		httpClient = &http.Client{Transport: recorder, Timeout: 30 * time.Second}
+		dexClient.HTTPClient = httpClient
+		ref.setClient(httpClient)
+	}
+
 	eng := &route.Engine{
-		DEX:     &dex.Client{},
-		RefRate: &refrate.Checked{Inner: &refrate.ExchangeRateAPI{}},
+		DEX:     dexClient,
+		RefRate: &refrate.Checked{Inner: refProvider},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -84,7 +131,34 @@ func main() {
 	if *jsonOut {
 		printJSON(result, "USD/"+c.refPair)
 	} else {
-		printTable(ctx, result, c)
+		printTable(ctx, result, c, refProvider)
+	}
+
+	// Saved after the run so a snapshot only ever exists for a measurement
+	// that actually completed.
+	//
+	// A rung that errored means an upstream call did not return, so the
+	// recording has a hole in it. Replaying that would render a corridor as
+	// partially unpriced when the market was fine and the network was not,
+	// which is a fabricated finding — refuse it and let the operator re-run.
+	if recorder != nil {
+		if failed := erroredRungs(result); len(failed) > 0 {
+			fmt.Fprintf(os.Stderr,
+				"\nnot recording a snapshot: %d of %d sizes failed to reach an upstream (%s).\n"+
+					"A snapshot with a gap would replay as a corridor that is partly unpriced. Re-run.\n",
+				len(failed), len(result.Rungs), strings.Join(failed, ", "))
+			os.Exit(1)
+		}
+		dir := filepath.Join(*record, snapshot.DirName(recorder.Corridor, time.Now()))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "creating snapshot directory: %v\n", err)
+			os.Exit(1)
+		}
+		if err := recorder.Save(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "saving snapshot: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "\nrecorded %d upstream responses to %s\n", recorder.Count(), dir)
 	}
 
 	// A ladder with no recommended size at any point is the normal shape of
@@ -118,6 +192,70 @@ func parseSizes(raw string) ([]decimal.Decimal, error) {
 	return out, nil
 }
 
+// erroredRungs names the sizes whose upstream call failed.
+//
+// This is distinct from a size that returned no path: NO-MARKET is a finding,
+// while a transport error is an absence of information, and only the second
+// makes a recording unfit to publish.
+func erroredRungs(l *route.LadderResult) []string {
+	var out []string
+	for _, r := range l.Rungs {
+		if r.Err != nil {
+			out = append(out, r.SendAmount.String())
+		}
+	}
+	return out
+}
+
+// refSource bundles a reference provider with the two things a caller needs
+// that the Provider interface deliberately does not expose: where it fetches
+// from, for a snapshot manifest, and how to give it a recording HTTP client.
+type refSource struct {
+	provider  refrate.Provider
+	baseURL   string
+	setClient func(*http.Client)
+}
+
+// referenceProvider resolves the -ref flag.
+//
+// An unknown name is an error rather than a fallback to the default. Silently
+// substituting a different benchmark than the one asked for would mislabel
+// every figure the run produces.
+func referenceProvider(name string) (refSource, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "exchangerate-api", "":
+		p := &refrate.ExchangeRateAPI{}
+		return refSource{p, refrate.DefaultExchangeRateAPI, func(c *http.Client) { p.Client = c }}, nil
+	case "currency-api":
+		p := &refrate.CurrencyAPI{}
+		return refSource{p, refrate.DefaultCurrencyAPI, func(c *http.Client) { p.Client = c }}, nil
+	}
+	return refSource{}, fmt.Errorf(
+		"unknown reference provider %q; known: exchangerate-api, currency-api", name)
+}
+
+// sizeStrings renders ladder sizes for a snapshot manifest. They are decimal
+// strings there for the same reason they are everywhere else: a JSON number
+// invites a reader to parse them back through a float64.
+func sizeStrings(sizes []decimal.Decimal) []string {
+	out := make([]string, len(sizes))
+	for i, s := range sizes {
+		out[i] = s.String()
+	}
+	return out
+}
+
+// gitRevision records which build captured a snapshot, so a fixture that
+// disagrees with the current parser can be traced to the code that wrote it.
+// An unavailable revision is recorded as absent rather than guessed.
+func gitRevision() string {
+	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // printJSON writes the shared wire shape and nothing else to stdout, so
 // `go run ./cmd/ladder -to GHSC -json | jq` works.
 func printJSON(result *route.LadderResult, pair string) {
@@ -133,7 +271,10 @@ func printJSON(result *route.LadderResult, pair string) {
 
 // printTable renders the human-readable text table. This is the default
 // output and its format is unchanged from before -json existed.
-func printTable(ctx context.Context, result *route.LadderResult, c corridor) {
+// The reference provider is passed in rather than constructed here: a second
+// construction is a second HTTP client, which would bypass a recorder and
+// leave the snapshot missing the very rate the table prints.
+func printTable(ctx context.Context, result *route.LadderResult, c corridor, ref refrate.Provider) {
 	fmt.Printf("corridor USDC -> %s, benchmarked against USD/%s\n", c.dest.Code, c.refPair)
 	fmt.Printf("run at %s\n\n", time.Now().UTC().Format(time.RFC3339))
 	fmt.Printf("%-8s %14s %12s %9s %-10s %-11s %s\n",
@@ -177,7 +318,7 @@ func printTable(ctx context.Context, result *route.LadderResult, c corridor) {
 		}
 	}
 
-	if r, err := (&refrate.ExchangeRateAPI{}).Rate(ctx, "USD", c.refPair); err == nil {
+	if r, err := ref.Rate(ctx, "USD", c.refPair); err == nil {
 		fmt.Printf("\nreference mid: %s USD/%s via %s, as of %s\n",
 			r.Mid.StringFixed(4), c.refPair, r.Source, r.AsOf.UTC().Format(time.RFC3339))
 	}
