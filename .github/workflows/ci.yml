@@ -13,6 +13,7 @@ jobs:
   build:
     name: build and test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +44,7 @@ jobs:
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -60,3 +62,67 @@ jobs:
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.1.6
+
+  # Every test is meant to run from recorded bytes. snapshot.Replayer returns
+  # ErrNotRecorded rather than falling through to the network, so a test that
+  # reaches out fails instead of passing intermittently — but that only holds
+  # while nothing bypasses the replayer. This proves it structurally rather
+  # than by convention.
+  offline-tests:
+    name: tests run with no network
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      # Only the modules need fetching. Compilation itself never touches the
+      # network, so downloading is enough and is far cheaper than a full build.
+      - name: download modules
+        run: go mod download
+
+      # The tests run in a network namespace with no route out, rather than
+      # behind firewall rules.
+      #
+      # An earlier version blocked ports 80 and 443 with iptables on OUTPUT.
+      # That also severs the Actions agent's own control connection to GitHub:
+      # the runner stops reporting, the job hangs until the lost-communication
+      # timeout, and no logs are ever uploaded. It failed after 45 minutes
+      # without reaching a single test.
+      #
+      # Namespacing confines the blackout to the test process. Loopback is
+      # brought up inside it because the tests stand up httptest servers on
+      # 127.0.0.1 — tearing that down would fail them for a reason that has
+      # nothing to do with egress.
+      - name: run tests with no network
+        run: |
+          set -euo pipefail
+
+          # Ubuntu 24.04 runners restrict unprivileged user namespaces through
+          # AppArmor, so plain `unshare -rn` fails with EPERM on uid_map.
+          # Lifting the restriction is preferable to running the tests under
+          # sudo: as root the Go module and build caches resolve to a
+          # different HOME, the warmed modules are missed, and the download
+          # that follows is the very thing being blocked.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+          unshare -rn bash -c 'ip link set lo up 2>/dev/null; go test -count=1 ./...'
+
+  # The image is how the monitor actually runs. Building it only at deploy
+  # time means it breaks at the least convenient moment.
+  docker:
+    name: container image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build image
+        run: docker build -t wayfare:ci .
+
+      - name: binary runs in the image
+        run: docker run --rm wayfare:ci -verify-store -data /tmp/empty
