@@ -221,3 +221,39 @@ func TestHumanAge(t *testing.T) {
 		}
 	}
 }
+
+// TestUIRendersAllThreeFindingStates guards the distinction in the surface a
+// human actually reads.
+//
+// A UI that showed only pass and fail would render "this anchor publishes no
+// SEP-10 endpoint" identically to "this anchor's SEP-10 endpoint is dead" —
+// discarding, at the last step, the distinction the whole check contract
+// exists to preserve.
+func TestUIRendersAllThreeFindingStates(t *testing.T) {
+	raw, err := uiFS.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(raw)
+
+	for _, want := range []string{"UNKNOWN", "PASS", "FAIL", "f-unknown", "f-pass", "f-fail"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the UI has no %q state; findings would render incompletely", want)
+		}
+	}
+
+	// The undetermined branch must come first, so a check that did not run
+	// cannot fall through into the passed/failed comparison.
+	unknownAt := strings.Index(page, "!c.determined")
+	passedAt := strings.Index(page, "c.passed")
+	if unknownAt == -1 || passedAt == -1 || unknownAt > passedAt {
+		t.Error("the UI tests c.passed before c.determined; an undetermined check " +
+			"would be rendered as a failure")
+	}
+
+	// It must also say that undetermined is not a failure, since that is the
+	// least intuitive part of the model.
+	if !strings.Contains(page, "Undetermined is not a failure") {
+		t.Error("the UI does not explain that undetermined is not a failure")
+	}
+}

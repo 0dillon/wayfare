@@ -81,6 +81,20 @@
   .v-poor { color: var(--warn); }
   .v-good, .v-fair { color: var(--ok); }
   .scroll { overflow-x: auto; }
+  .finding-row { display: flex; gap: .7rem; align-items: baseline; padding: .5rem 0;
+                 border-bottom: 1px solid var(--grid); }
+  .finding-row:last-child { border-bottom: 0; }
+  .f-state { font: 600 .68rem/1.5 var(--mono); letter-spacing: .05em; padding: .1rem .45rem;
+             border-radius: 4px; border: 1px solid currentColor; white-space: nowrap; }
+  .f-pass { color: var(--ok); }
+  .f-fail { color: var(--bad); }
+  .f-unknown { color: var(--muted); }
+  .f-body { flex: 1; min-width: 0; }
+  .f-id { font-family: var(--mono); font-size: .76rem; color: var(--muted); }
+  .f-summary { font-size: .9rem; }
+  .f-limit { font-size: .8rem; color: var(--muted); margin-top: .2rem; }
+  .f-evidence { font-family: var(--mono); font-size: .74rem; color: var(--muted);
+                margin-top: .3rem; word-break: break-all; }
   .meta { color: var(--muted); font-size: .82rem; margin-top: .9rem; }
   .err { color: var(--bad); }
   h2 { font-size: .95rem; margin: 0 0 .8rem; letter-spacing: .01em; }
@@ -172,6 +186,8 @@ function render(d) {
     parts.push(`<div class="panel"><h2>Measurements</h2><div class="scroll">${table(d.rungs)}</div></div>`);
   }
 
+  if (d.findings) parts.push(findings(d.findings));
+
   parts.push(caseStudy(d));
   $('out').innerHTML = parts.join('');
 }
@@ -260,6 +276,49 @@ function table(rungs) {
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+}
+
+// Findings are counterparty facts. They sit below the measurement on purpose:
+// they qualify what the numbers mean, and never change them.
+function findings(f) {
+  const rows = f.checks.map(c => {
+    // Three states, never two. An undetermined check is not a failure — an
+    // anchor publishing no endpoint differs from one publishing a dead one,
+    // and collapsing them would throw away the distinction the whole check
+    // contract exists to preserve.
+    const state = !c.determined ? ['UNKNOWN', 'f-unknown']
+                : c.passed      ? ['PASS', 'f-pass']
+                :                 ['FAIL', 'f-fail'];
+
+    const text = c.determined ? c.summary : (c.reason || c.summary);
+
+    const evidence = (c.evidence || []).map(e =>
+      `<div class="f-evidence">${esc(e.source)} → ${esc(e.observed)}</div>`).join('');
+
+    return `<div class="finding-row">
+      <span class="f-state ${state[1]}">${state[0]}</span>
+      <div class="f-body">
+        <div class="f-summary">${esc(text)}</div>
+        <div class="f-id">${esc(c.id)}${c.determined && !c.passed ? ' · ' + esc(c.severity) : ''}</div>
+        ${evidence}
+      </div>
+    </div>`;
+  }).join('');
+
+  const counts = [];
+  if (f.failed) counts.push(`${f.failed} failed`);
+  if (f.undetermined) counts.push(`${f.undetermined} undetermined`);
+  if (f.passed) counts.push(`${f.passed} passed`);
+
+  return `<div class="panel">
+    <h2>Counterparty checks &mdash; ${esc(counts.join(', '))}</h2>
+    ${rows}
+    <p class="meta">These describe the issuer and anchor this corridor depends on.
+    They qualify the result above and never change it: the integrity state and every
+    verdict are computed from pathfinding and the reference rate alone.
+    <strong>Undetermined is not a failure</strong> &mdash; an anchor that publishes
+    nothing is a different fact from one that publishes something broken.</p>
+  </div>`;
 }
 
 function caseStudy(d) {
