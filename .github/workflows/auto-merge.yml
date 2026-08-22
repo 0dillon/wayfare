@@ -232,16 +232,103 @@ jobs:
           fi
 
           # ---------------------------------------------------------------
+          # GATE 7 — the change is within the scope its issue named.
+          #
+          # A shell script cannot judge whether a change is *right*. It can
+          # check something narrower and still useful: that the PR touched only
+          # what its issue said it would. The issue template requires a section
+          # naming the package and file, precisely so this is answerable.
+          #
+          # Out-of-scope files are the sprawl that turns a small contribution
+          # into a review problem, and they are also how an unrelated change
+          # rides in on an approved one.
+          # ---------------------------------------------------------------
+          issue_num=$(grep -ioE '(clos(e|es|ed)|fix(e|es|ed)?|resolv(e|es|ed))[[:space:]]+#[0-9]+' <<<"$body" \
+            | grep -oE '[0-9]+' | head -1 || true)
+
+          scope_note=""
+          if [ -z "$issue_num" ]; then
+            reasons+=("does not say which issue it closes, so its intended scope is unstated")
+          else
+            issue_body=$(gh api "repos/$REPO/issues/$issue_num" --jq '.body // ""' 2>/dev/null || true)
+            issue_title=$(gh api "repos/$REPO/issues/$issue_num" --jq '.title // ""' 2>/dev/null || true)
+
+            # Paths the issue names: backticked tokens that look like a file
+            # or a package directory.
+            named=$(grep -oE '`[a-zA-Z0-9_./-]+`' <<<"$issue_body" \
+              | tr -d '`' \
+              | grep -E '(/|\.go$|\.md$|\.ya?ml$)' \
+              | sed 's:/*$::' | sort -u || true)
+
+            if [ -z "$named" ]; then
+              reasons+=("issue #$issue_num names no files or packages, so scope cannot be verified mechanically")
+            else
+              echo "issue #$issue_num names:"; echo "$named" | sed 's/^/    /'
+              outside=""
+              while IFS= read -r f; do
+                [ -z "$f" ] && continue
+                # Test files and docs accompanying in-scope work are allowed.
+                case "$f" in
+                  *_test.go|docs/*|*.md) continue ;;
+                esac
+                match=no
+                while IFS= read -r n; do
+                  [ -z "$n" ] && continue
+                  case "$f" in
+                    "$n"|"$n"/*) match=yes; break ;;
+                  esac
+                done <<<"$named"
+                [ "$match" = no ] && outside="$outside $f"
+              done <<<"$files"
+
+              if [ -n "$outside" ]; then
+                reasons+=("changes files outside the scope issue #$issue_num named:$(echo "$outside" | tr ' ' '\n' | sed 's/^/ /' | tr '\n' ' ')")
+              else
+                scope_note="every changed file falls within the scope issue #$issue_num named"
+              fi
+            fi
+          fi
+
+          # ---------------------------------------------------------------
           # Decide.
           # ---------------------------------------------------------------
           if [ ${#reasons[@]} -eq 0 ]; then
             echo "all gates satisfied; merging"
             gh pr merge "$PR" --repo "$REPO" --squash --delete-branch
-            gh pr comment "$PR" --repo "$REPO" --body "**Approved. All CI checks and CodeRabbit review passed.**
+            # Describe what landed, then say plainly what was and was not
+            # verified. A merge notice that only says "approved" invites a
+            # reader to assume more was checked than actually was.
+            stats=$(gh api "repos/$REPO/pulls/$PR" \
+              --jq '"\(.changed_files) file(s), +\(.additions) −\(.deletions)"')
+            gofiles=$(echo "$files" | grep -cE '\.go$' || true)
+            testfiles=$(echo "$files" | grep -cE '_test\.go$' || true)
 
-            Merged automatically: no maintainer-owned path touched, no dependency change, checklist confirmed, every check green, and CodeRabbit has reviewed.
-
-            Auto-merge only lands what it can verify mechanically. It forms no judgement about whether a change is *right* — that stays with the maintainer, and is safe to defer here because nothing this PR touched can alter a published figure."
+            {
+              echo "**Approved. All CI checks and CodeRabbit review passed.**"
+              echo
+              echo "### What this changed"
+              echo
+              if [ -n "$issue_num" ]; then
+                echo "Closes #${issue_num}${issue_title:+ — $issue_title}"
+                echo
+              fi
+              echo "$stats — ${gofiles} Go file(s), ${testfiles} of them tests."
+              echo
+              echo "$files" | sed 's/^/- `/; s/$/`/'
+              echo
+              echo "### What was verified"
+              echo
+              echo "- Every check green: $(awk -F'\t' '{print $1}' <<<"$runs" | paste -sd ', ' -)"
+              echo "- CodeRabbit reviewed this pull request"
+              [ -n "$scope_note" ] && echo "- Scope: $scope_note"
+              echo "- No maintainer-owned path touched — nothing here can alter a published figure"
+              echo "- No dependency change"
+              echo "- Contributor checklist confirmed"
+              echo
+              echo "### What was not"
+              echo
+              echo "Whether the change is *correct*. Auto-merge verifies only what it can check mechanically — that the right files were touched, the tests pass, and the review happened. It forms no judgement about the substance, which is why it declines to merge anything touching pricing, the verdict thresholds, the integrity taxonomy, or the published chain."
+            } | gh pr comment "$PR" --repo "$REPO" --body-file -
             exit 0
           fi
 
