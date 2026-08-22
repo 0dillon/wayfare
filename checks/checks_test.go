@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"encoding/base32"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -657,6 +658,98 @@ func TestSEP10GenuineErrorStillFails(t *testing.T) {
 		if !r.Failed() {
 			t.Errorf("%s: should still be a determined failure, got determined=%v passed=%v",
 				body, r.Determined, r.Passed)
+		}
+	}
+}
+
+// SSRF guard ------------------------------------------------------------------
+
+// TestGuardRejectsInternalTargets is the attack CodeRabbit identified.
+//
+// These URLs are not user input. They come from stellar.toml documents
+// published by the anchors this tool audits, and they are fetched by a server
+// on behalf of anyone who asks for a corridor. An anchor that wanted to could
+// publish a WEB_AUTH_ENDPOINT pointing at cloud metadata or at whatever else
+// the host can reach.
+func TestGuardRejectsInternalTargets(t *testing.T) {
+	blocked := map[string]string{
+		"loopback v4":     "127.0.0.1",
+		"loopback name":   "localhost",
+		"cloud metadata":  "169.254.169.254",
+		"private 10/8":    "10.0.0.1",
+		"private 172.16":  "172.16.5.4",
+		"private 192.168": "192.168.1.1",
+		"unspecified":     "0.0.0.0",
+		"loopback v6":     "[::1]",
+		"unique-local v6": "[fd00::1]",
+	}
+
+	client := GuardedClient(3 * time.Second)
+	for name, host := range blocked {
+		t.Run(name, func(t *testing.T) {
+			_, err := client.Get("http://" + host + "/latest/meta-data/")
+			if err == nil {
+				t.Fatalf("%s was reachable; an anchor-published URL must never "+
+					"make this server probe its own network", host)
+			}
+			if !strings.Contains(err.Error(), "refusing to") {
+				t.Errorf("%s: error %q does not name the guard as the cause", host, err)
+			}
+		})
+	}
+}
+
+// TestGuardedCheckRefusesInternalEndpoint covers the guard where it matters:
+// a check probing an endpoint the subject declared.
+func TestGuardedCheckRefusesInternalEndpoint(t *testing.T) {
+	c := SEP10EndpointResponds{} // no client supplied, so the guarded default
+	r := Run(ctx(), c, Subject{
+		Profile: sep10Profile("http://169.254.169.254/latest/meta-data/"),
+	})
+
+	// A refusal is a determined failure about the anchor, not an unknown:
+	// publishing an endpoint that points inside the prober's network is a
+	// fact about the anchor worth reporting.
+	if !r.Failed() {
+		t.Errorf("probing a metadata address should fail the check, got determined=%v passed=%v",
+			r.Determined, r.Passed)
+	}
+}
+
+// TestGuardAllowsPublicAddresses is the control. A guard that blocked
+// everything would pass the tests above and make every check useless.
+func TestGuardAllowsPublicAddresses(t *testing.T) {
+	for _, ip := range []string{"93.184.216.34", "8.8.8.8", "2606:4700::1"} {
+		parsed := net.ParseIP(strings.Trim(ip, "[]"))
+		if parsed == nil {
+			t.Fatalf("test bug: %q is not an IP", ip)
+		}
+		if disallowedIP(parsed) {
+			t.Errorf("%s is a public address and must be reachable", ip)
+		}
+	}
+}
+
+// TestErrorBodyIsBounded covers the other finding: an endpoint returning an
+// enormous body must not be decoded whole.
+func TestErrorBodyIsBounded(t *testing.T) {
+	huge := `{"error":"` + strings.Repeat("A", 512<<10) + `"}`
+	srv := flagServer(t, 400, huge)
+
+	r := Run(ctx(), SEP10EndpointResponds{HTTPClient: srv.Client()},
+		Subject{Profile: sep10Profile(srv.URL + "/auth")})
+
+	// Truncated JSON does not decode, so no message is extracted and the
+	// endpoint is still reported as failing — which is correct. What matters
+	// is that the whole body was never held in memory.
+	if !r.Failed() {
+		t.Errorf("an endpoint returning HTTP 400 should still fail, got determined=%v passed=%v",
+			r.Determined, r.Passed)
+	}
+	for _, e := range r.Evidence {
+		if len(e.Observed) > maxErrorBody {
+			t.Errorf("evidence retained %d bytes, exceeding the %d-byte bound",
+				len(e.Observed), maxErrorBody)
 		}
 	}
 }

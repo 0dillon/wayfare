@@ -43,8 +43,8 @@ type Runner struct {
 func (r *Runner) Default() []Check {
 	return []Check{
 		AnchorAssetISO4217{},
-		SEP10EndpointResponds{HTTPClient: r.HTTPClient},
-		IssuerAuthFlags{HorizonURL: r.HorizonURL, HTTPClient: r.HTTPClient},
+		SEP10EndpointResponds{HTTPClient: r.client()},
+		IssuerAuthFlags{HorizonURL: r.HorizonURL, HTTPClient: r.client()},
 	}
 }
 
@@ -66,7 +66,20 @@ func (r *Runner) resolver() *anchor.Resolver {
 	if r.Resolver != nil {
 		return r.Resolver
 	}
-	return &anchor.Resolver{HTTPClient: r.HTTPClient}
+	return &anchor.Resolver{HTTPClient: r.client()}
+}
+
+// client returns the transport checks use.
+//
+// The default is guarded, because every URL reached through it — a
+// stellar.toml, a declared auth endpoint — is published by the party being
+// audited. An explicitly supplied client is used unchanged, which is what lets
+// a snapshot replayer serve recorded bytes with no network at all.
+func (r *Runner) client() *http.Client {
+	if r.HTTPClient != nil {
+		return r.HTTPClient
+	}
+	return GuardedClient(15 * time.Second)
 }
 
 // ForAsset runs every check against one asset, resolving its anchor first.

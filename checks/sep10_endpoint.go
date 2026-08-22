@@ -87,7 +87,8 @@ func (c SEP10EndpointResponds) client() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	// Guarded by default: this probes a URL the audited anchor published.
+	return GuardedClient(15 * time.Second)
 }
 
 func (c SEP10EndpointResponds) account() string {
@@ -158,7 +159,7 @@ func (c SEP10EndpointResponds) Run(ctx context.Context, s Subject) CheckResult {
 		// problem, not a defect in its endpoint. Blaming the anchor for a
 		// request we malformed is exactly the false failure this check
 		// produced when its probe account had a bad checksum.
-		msg := errorMessage(resp.Body)
+		msg := errorMessage(io.LimitReader(resp.Body, maxErrorBody))
 		if rejectsProbe(msg) {
 			return Undetermined(d, s,
 				fmt.Sprintf("the endpoint rejected the probe account rather than failing: %q. "+
