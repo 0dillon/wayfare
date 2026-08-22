@@ -15,6 +15,9 @@ package refrate
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -32,7 +35,46 @@ type Rate struct {
 	Mid    decimal.Decimal // units of Quote per one unit of Base
 	AsOf   time.Time
 	Source string // provider identity, surfaced so users can audit it
+
+	// FetchedAt is when this project last obtained the rate from the
+	// provider, which is a different question from AsOf: AsOf is when the
+	// upstream says the rate was set, FetchedAt is when we asked. A cached
+	// rate has an older FetchedAt and an unchanged AsOf, and a reader needs
+	// both to judge whether a figure is current.
+	FetchedAt time.Time
+
+	// Cross-check fields, populated by Cross when a second provider
+	// answered. Mid and Source above always name the rate that was scored
+	// against; these name the other one.
+	//
+	// Both are carried even when the providers agree. A corridor's figures
+	// moving because the benchmark changed is a different event from the
+	// corridor moving, and a record keeping only the mid it scored against
+	// cannot distinguish them afterwards.
+	SecondaryMid    decimal.Decimal
+	SecondarySource string
+	SecondaryAsOf   time.Time
+
+	// DivergencePct is how far apart the two mids are, relative to the
+	// smaller, so the figure does not depend on which is primary.
+	DivergencePct decimal.Decimal
+
+	// Agreement records how the two providers related. The zero value,
+	// AgreementSingle, is correct for a rate that was never cross-checked.
+	Agreement Agreement
+
+	// Note explains a non-trivial Agreement in prose, for surfaces that
+	// show a reason rather than a state.
+	Note string
 }
+
+// Scorable reports whether a verdict may be derived from this rate.
+//
+// False means the two providers disagreed so far apart that one of them is
+// broken rather than merely different. Scoring against either would produce a
+// figure whose value depends on which feed was believed, which is not a
+// measurement — see the threshold rationale in cross.go.
+func (r Rate) Scorable() bool { return r.Agreement != AgreementMalfunction }
 
 // Pair renders the currency pair, e.g. "USD/NGN".
 func (r Rate) Pair() string { return r.Base + "/" + r.Quote }
@@ -57,6 +99,50 @@ type ErrNoRate struct {
 
 func (e *ErrNoRate) Error() string {
 	return fmt.Sprintf("refrate: %s has no rate for %s/%s", e.Source, e.Base, e.Quote)
+}
+
+// ErrRateLimited reports that a provider refused because the caller has spent
+// its quota.
+//
+// It is distinct from a generic failure because the remedy is different and
+// the caller can act on it: a rate limit says "ask again later", where a
+// decode failure says "this provider is broken". Collapsing the two would hide
+// the single most likely way a free-tier feed fails under a schedule.
+type ErrRateLimited struct {
+	Source     string
+	RetryAfter time.Duration
+	Message    string
+}
+
+func (e *ErrRateLimited) Error() string {
+	msg := fmt.Sprintf("refrate: %s rate-limited this request", e.Source)
+	if e.RetryAfter > 0 {
+		msg += fmt.Sprintf("; retry after %s", e.RetryAfter)
+	}
+	if e.Message != "" {
+		msg += ": " + e.Message
+	}
+	return msg
+}
+
+// retryAfter reads the Retry-After header, which providers are free not to
+// send. A missing or unparseable value reports zero rather than a guess — an
+// invented backoff is the kind of plausible-looking number this project
+// refuses everywhere else.
+func retryAfter(resp *http.Response) time.Duration {
+	v := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 // Static is a Provider backed by hardcoded rates.

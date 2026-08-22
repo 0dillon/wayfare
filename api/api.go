@@ -18,11 +18,16 @@ import (
 
 	"github.com/Wayfare-labs/wayfare/asset"
 	"github.com/Wayfare-labs/wayfare/route"
+	"github.com/Wayfare-labs/wayfare/runstore"
 )
 
 // Server serves the monitor API and its UI.
 type Server struct {
 	Engine *route.Engine
+
+	// Store is the measurement history. Optional: with none, a failed live
+	// measurement is an error, exactly as it was before history existed.
+	Store runstore.Store
 
 	// Timeout bounds a single corridor measurement. A full ladder is a
 	// dozen round trips to Horizon, so this is generous by HTTP standards.
@@ -100,7 +105,24 @@ func (s *Server) handleCorridor(w http.ResponseWriter, r *http.Request) {
 		ReferenceBase:  pegBase,
 		ReferenceQuote: pegQuote,
 	})
+	// A ladder whose every rung errored is not a measurement, even though
+	// Ladder itself returns no error: the figures would all be zero and the
+	// body would look exactly like a corridor that priced at nothing. Treat
+	// it as the failure it is.
+	if err == nil && res.Failed() {
+		err = fmt.Errorf("no size could be measured; every request failed to reach an upstream")
+	}
 	if err != nil {
+		// A live measurement failed. If history exists, serve the most
+		// recent stored run with an explicit stale envelope; if it does
+		// not, error. Nothing is ever synthesised to fill the gap — this
+		// is the one place a continuous monitor can quietly betray the
+		// project, by returning a plausible number instead of admitting
+		// it does not currently know.
+		if stale, ok := s.staleFor(ctx, sendAsset.Code, recvAsset.Code, pegBase+"/"+pegQuote); ok {
+			writeJSON(w, http.StatusOK, stale)
+			return
+		}
 		status := http.StatusBadGateway
 		if errors.Is(err, context.DeadlineExceeded) {
 			status = http.StatusGatewayTimeout
@@ -181,4 +203,125 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// staleFor returns the most recent stored run for a corridor, labelled as
+// stale, or false when there is no history to serve.
+//
+// The returned document is deliberately the same shape as a live one, with two
+// differences a client cannot miss: live is false, and stale carries the age.
+// Serving a different shape would mean every consumer needed two parsers, and
+// the one that forgot would be the one that rendered a six-hour-old reading as
+// current.
+func (s *Server) staleFor(ctx context.Context, send, recv, pair string) (route.CorridorJSON, bool) {
+	if s.Store == nil {
+		return route.CorridorJSON{}, false
+	}
+	rec, err := s.Store.Latest(ctx, runstore.CorridorKey(send, recv))
+	if err != nil || rec == nil {
+		return route.CorridorJSON{}, false
+	}
+	return staleJSON(rec, pair, time.Now().UTC()), true
+}
+
+// staleJSON renders a stored record in the wire shape, marked not live.
+func staleJSON(rec *runstore.Record, pair string, now time.Time) route.CorridorJSON {
+	age := now.Sub(rec.RecordedAt.UTC())
+	if age < 0 {
+		age = 0
+	}
+
+	out := route.CorridorJSON{
+		SendAsset:                assetFromCode(rec.Corridor, 0),
+		ReceiveAsset:             assetFromCode(rec.Corridor, 1),
+		Integrity:                rec.Integrity,
+		DependsOn:                []route.AssetJSON{},
+		ReferenceMid:             rec.Reference.Mid,
+		ReferenceSource:          rec.Reference.Source,
+		ReferencePair:            pair,
+		ReferenceSecondaryMid:    rec.Reference.SecondaryMid,
+		ReferenceSecondarySource: rec.Reference.SecondarySource,
+		ReferenceDivergencePct:   rec.Reference.DivergencePct,
+		Floor:                    rec.FloorLossPct,
+		FloorSize:                rec.FloorSize,
+		WorstLoss:                rec.WorstLossPct,
+		WorstSize:                rec.WorstSize,
+		RecommendedSize:          rec.RecommendedSize,
+		Finding:                  rec.Finding,
+		Rungs:                    make([]route.RungJSON, 0, len(rec.Rungs)),
+		MeasuredAt:               rec.RecordedAt.UTC().Format(time.RFC3339),
+
+		Live: false,
+		Stale: &route.StaleJSON{
+			RecordedAt: rec.RecordedAt.UTC().Format(time.RFC3339),
+			AgeSeconds: int64(age.Seconds()),
+			AgeHuman:   humanAge(age),
+		},
+	}
+
+	for _, code := range rec.DependsOn {
+		out.DependsOn = append(out.DependsOn, route.AssetJSON{Code: code})
+	}
+	for _, r := range rec.Rungs {
+		rj := route.RungJSON{
+			SendAmount: r.SendAmount,
+			Priced:     r.Priced,
+			Integrity:  r.Integrity,
+			Notes:      []string{},
+		}
+		if r.Priced {
+			rj.Quote = &route.QuoteJSON{
+				Description:   r.Path,
+				Source:        "stellar-dex",
+				ReceiveAmount: r.ReceiveAmount,
+				EffectiveRate: r.EffectiveRate,
+				LossPct:       r.LossPct,
+				Verdict:       r.Verdict,
+				Warnings:      []string{},
+			}
+		}
+		out.Rungs = append(out.Rungs, rj)
+	}
+
+	// A stored run's recommendation is carried exactly as recorded — null
+	// stays null. Promoting a stored quote here would recreate, on the
+	// stale path, the recommendation the monitor refused to make live.
+	if rec.Recommended != nil {
+		out.Recommended = &route.QuoteJSON{
+			Description:   rec.Recommended.Path,
+			Source:        "stellar-dex",
+			ReceiveAmount: rec.Recommended.ReceiveAmount,
+			EffectiveRate: rec.Recommended.EffectiveRate,
+			LossPct:       rec.Recommended.LossPct,
+			Verdict:       rec.Recommended.Verdict,
+			Warnings:      []string{},
+		}
+	}
+	return out
+}
+
+// assetFromCode splits a stored corridor key like "USDC-NGNC".
+func assetFromCode(corridor string, idx int) route.AssetJSON {
+	parts := strings.SplitN(corridor, "-", 2)
+	if idx >= len(parts) {
+		return route.AssetJSON{}
+	}
+	if a, ok := asset.Lookup(parts[idx]); ok {
+		return route.ToAssetJSON(a)
+	}
+	return route.AssetJSON{Code: parts[idx]}
+}
+
+// humanAge renders a duration the way a reader thinks about staleness.
+func humanAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }

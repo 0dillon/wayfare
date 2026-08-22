@@ -283,6 +283,12 @@ type Result struct {
 	ReferenceSource string
 	ReferenceAsOf   time.Time
 
+	// Reference is the full reference rate, including the second
+	// provider's mid and how far the two diverged. Carried whole so a
+	// caller can report which benchmark produced a verdict without the
+	// engine having to flatten that into prose.
+	Reference refrate.Rate
+
 	// Integrity is the corridor's structural state, independent of pricing.
 	// A caller that reports only Quotes and Recommended will silently
 	// misrepresent a no-market or derivative corridor.
@@ -323,11 +329,21 @@ func (e *Engine) Quote(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("route: reference rate unavailable: %w", err)
 	}
 
+	// A benchmark the providers cannot agree on is not a benchmark. Scoring
+	// against either mid would produce a loss figure whose value depends on
+	// which feed was believed, which is closer to fabricated than measured —
+	// so the corridor is reported with no verdict and the reason attached,
+	// rather than with a number that looks like a measurement.
+	if !ref.Scorable() {
+		return e.unscored(ctx, req, ref)
+	}
+
 	res := &Result{
 		Request:         req,
 		ReferenceMid:    ref.Mid,
 		ReferenceSource: ref.Source,
 		ReferenceAsOf:   ref.AsOf,
+		Reference:       ref,
 	}
 
 	if e.DEX != nil {
@@ -382,6 +398,48 @@ func (e *Engine) Quote(ctx context.Context, req Request) (*Result, error) {
 	if len(res.Quotes) == 0 && res.Integrity != IntegrityNoMarket {
 		res.Notes = append(res.Notes, "No route could be priced for this corridor.")
 	}
+	return res, nil
+}
+
+// unscored reports a corridor whose benchmark could not be trusted.
+//
+// The routes are still discovered and their structure still classified — that
+// part does not depend on the reference rate, and integrity is exactly the
+// thing worth reporting when pricing cannot be. What is withheld is every
+// verdict, the loss figures, and any recommendation.
+func (e *Engine) unscored(ctx context.Context, req Request, ref refrate.Rate) (*Result, error) {
+	res := &Result{
+		Request:         req,
+		ReferenceMid:    ref.Mid,
+		ReferenceSource: ref.Source,
+		ReferenceAsOf:   ref.AsOf,
+		Reference:       ref,
+	}
+
+	if e.DEX != nil {
+		if d, err := e.quoteDEX(ctx, req, ref); err == nil {
+			res.Integrity = d.integrity
+			res.DependsOn = d.dependsOn
+			if d.quote != nil {
+				// Carried for its route description and receive amount;
+				// score() left the verdict Unknown because the mid is not
+				// usable, and nothing downstream may promote it.
+				q := *d.quote
+				q.Verdict = VerdictUnknown
+				q.LossPct = decimal.Zero
+				q.LossAmount = decimal.Zero
+				res.Quotes = append(res.Quotes, q)
+			}
+		} else {
+			res.Notes = append(res.Notes, "DEX route unavailable: "+err.Error())
+		}
+	}
+
+	note := ref.Note
+	if note == "" {
+		note = "the reference providers disagreed too far apart to score against either"
+	}
+	res.Notes = append(res.Notes, "No verdict: "+note)
 	return res, nil
 }
 

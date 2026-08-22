@@ -1,0 +1,11 @@
+{
+  "_note": "SEP-0038's own example. Fee 42 is BRL, the SELL asset. gross = 542/5 = 108.4 USDC, so the fee is 8.4 USDC — not 42.",
+  "sell_amount": "542",
+  "buy_amount": "100",
+  "price": "5",
+  "total_price": "5.42",
+  "gross_buy_amount": "108.4",
+  "fee_total": "42",
+  "fee_asset": "iso4217:BRL",
+  "fee_in_buy_asset": "8.4"
+}

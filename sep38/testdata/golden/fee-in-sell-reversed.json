@@ -1,0 +1,11 @@
+{
+  "_note": "Same branch as the spec example with the assets swapped: fee 10 is USDC, the SELL asset. gross = 100/0.18 = 555.56 BRL, fee 55.56 BRL. Included because it is the example in the package doc comment.",
+  "sell_amount": "100",
+  "buy_amount": "500",
+  "price": "0.18",
+  "total_price": "0.2",
+  "gross_buy_amount": "555.5555555555555556",
+  "fee_total": "10",
+  "fee_asset": "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+  "fee_in_buy_asset": "55.5555555555555556"
+}

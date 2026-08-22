@@ -1,0 +1,201 @@
+# Run store
+
+A tamper-evident history of corridor measurements.
+
+**Schema version 1.** Implemented by `runstore/`.
+
+---
+
+## What problem this solves
+
+Wayfare's claims look like *"measured live on 2026-08-08, USDC → NGNC lost
+25.02% at 0.1 USDC"*. A reader has to trust two separate things:
+
+1. **That the measurement happened as described.** Snapshots address this —
+   see [snapshot-format.md](snapshot-format.md).
+2. **That nobody adjusted it afterwards.** That is this package.
+
+Each record carries the hash of the record before it, so a stored history is a
+chain rather than a pile. Editing any past record changes its hash, which
+breaks every record after it. `Verify` walks the chain and names the first
+record that does not reconcile.
+
+**What this does not prove:** that a measurement was *correct*. It proves the
+stored history is the one that was written. There is one writer and the chain
+lives in a file, so anyone with write access can rewrite the whole chain from
+any point. What they cannot do is edit one record and leave the rest intact —
+which is the realistic failure mode: a number quietly improved long after it
+was published.
+
+This is not a blockchain and makes no distributed-consensus claim.
+
+---
+
+## Record shape
+
+```json
+{
+  "version": 1,
+  "seq": 42,
+  "recorded_at": "2026-08-21T22:30:40Z",
+  "corridor": "USDC-NGNC",
+  "integrity": "DIRECT",
+  "depends_on": [],
+  "reference": {
+    "mid": "1350.2568",
+    "source": "currency-api",
+    "as_of": "2026-08-21T00:00:00Z",
+    "secondary_mid": "1348.0585",
+    "secondary_source": "exchangerate-api",
+    "divergence_pct": "0.16",
+    "scored_against": "currency-api"
+  },
+  "floor_loss_pct": "25.02", "floor_size": "0.1",
+  "worst_loss_pct": "97.68", "worst_size": "5000",
+  "recommended": null,
+  "rungs": [
+    {"send_amount": "0.1", "priced": true, "integrity": "DIRECT",
+     "receive_amount": "102.78", "effective_rate": "1027.84",
+     "loss_pct": "24.65", "verdict": "UNUSABLE", "path": "USDC -> NGNC"}
+  ],
+  "prev_hash": "sha256:0000…0000",
+  "hash": "sha256:6b1f…"
+}
+```
+
+Records are derived from `route.CorridorJSON` — the same shape the HTTP API
+and `ladder -json` emit — so the stored record and the served record cannot
+drift into two schemas that disagree about the same measurement.
+
+Three fields are worth calling out:
+
+**`recommended` is `null`, not omitted,** when no size produced an acceptable
+route. That is the normal shape of a broken corridor, and storing it as an
+explicit null means a history can never be read as though the monitor made a
+recommendation it refused to make.
+
+**`reference` carries both mids, always,** even when the providers agree. A
+corridor's numbers moving because the benchmark changed is a completely
+different event from the corridor moving, and a history recording only the mid
+it scored against cannot distinguish them afterwards. `scored_against` names
+which mid produced the verdicts in that record.
+
+**All money is a decimal string.** Never a JSON number, never a `float64`.
+
+---
+
+## The preimage rule
+
+```
+hash = sha256(preimage)
+```
+
+The preimage is the record's JSON encoding **with the `hash` field omitted**,
+produced by Go's `encoding/json` over `runstore.Record` with:
+
+- `SetEscapeHTML(false)`
+- no indentation
+- fields in struct-declaration order (which is what `encoding/json` emits)
+- the trailing newline `Encoder.Encode` appends
+
+`prev_hash` is **inside** the preimage. That is what chains the records:
+altering an earlier record changes its hash, which changes the next record's
+preimage, and so on to the end of the file.
+
+Genesis `prev_hash` is `sha256:` followed by 64 zeros.
+
+`Record.Preimage()` is exported so verification is reproducible by anyone,
+using the same bytes the writer used rather than a reimplementation that might
+differ in a detail like HTML escaping.
+
+### Changing the record shape is a version bump
+
+Adding, removing, or reordering a field changes the preimage of **every record
+ever written**. A reader verifying last month's history against the new build
+would be told it had been tampered with.
+
+So a shape change is a `Version` bump plus a migration — never a compatible
+change, and never a tidy-up.
+
+This is enforced, not merely agreed. `TestRecordHashIsPinned` freezes the hash
+of a fixed record; a purely cosmetic field reorder fails it. The test's own
+comment says what to do when it goes red, because the tempting response —
+updating the constant — is exactly the mistake it exists to prevent.
+
+---
+
+## Storage
+
+NDJSON, one file per corridor, opened `O_APPEND`:
+
+```
+<dir>/USDC-NGNC.ndjson
+<dir>/USDC-GHSC.ndjson
+```
+
+No database, deliberately. The access pattern is *append one record every few
+hours, read the last one or two*. A file per corridor serves that exactly, is
+inspectable with tools everyone already has, and makes the chain verifiable
+with `sha256sum` and a text editor rather than a client library.
+
+One file per corridor because the chains are independent; `Verify` walks one
+at a time.
+
+Every write is `fsync`ed. At one write per few hours durability matters more
+than throughput, and a record acknowledged but lost in the page cache would
+leave the in-memory tip ahead of the file — so the next `Open` would report a
+broken chain for a record that was never really there.
+
+### Read path
+
+`Open` scans each file once, verifies the chain, and indexes the tail.
+Thereafter:
+
+- `Latest(corridor)` is a map read.
+- `Recent(corridor, 2)` is the whole read path for integrity-change detection
+  (issue #24).
+- `Verify(corridor)` re-reads and rechecks the full chain.
+
+`Open` **fails** if any existing chain is broken. A store that quietly loaded a
+broken chain and appended to it would bury the break under valid records.
+
+### Degrading gracefully
+
+A `Nop` store discards everything and is safe everywhere, so callers never
+branch on a nil store. `wayfared` with no history configured serves live
+measurements exactly as it did before this package existed.
+
+`Append` failures are logged, never propagated to the caller: a measurement
+that succeeded should still reach the reader even if recording it failed.
+
+---
+
+## Verifying a chain
+
+```bash
+wayfared -verify-store          # walks every corridor, exits non-zero on failure
+```
+
+Run it after any deploy, and after any restore from backup.
+
+A failure names the corridor and the `seq` of the first record that does not
+reconcile:
+
+```
+runstore: USDC-NGNC: record seq 3 has hash 1872c8f15412… but its contents
+hash to 8a4eecd77b48…; it was modified after it was written
+```
+
+### Backups
+
+The chain proves nothing was edited. It does **not** survive the volume dying.
+Copy the NDJSON files off-box on a schedule, and verify after restoring —
+a backup nobody has restored from is a hypothesis. See
+[deployment.md](deployment.md).
+
+---
+
+## Related
+
+- [snapshot-format.md](snapshot-format.md) — recorded upstream bytes
+- [CONTRIBUTING.md](../CONTRIBUTING.md) — project invariants

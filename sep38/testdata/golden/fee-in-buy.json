@@ -1,0 +1,11 @@
+{
+  "_note": "The other branch, and the only case where fee.asset names the BUY asset. price = 100/(500+10), so gross = 510 BRL and FeeInBuyAsset should equal fee.total exactly — no conversion needed.",
+  "sell_amount": "100",
+  "buy_amount": "500",
+  "price": "0.1960784313725490196",
+  "total_price": "0.2",
+  "gross_buy_amount": "510",
+  "fee_total": "10",
+  "fee_asset": "iso4217:BRL",
+  "fee_in_buy_asset": "10"
+}

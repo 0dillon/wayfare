@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/Wayfare-labs/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/refrate"
 )
 
 // DefaultSizes is the ladder used when a caller does not specify one.
@@ -81,6 +82,10 @@ type LadderResult struct {
 	ReferenceMid    decimal.Decimal
 	ReferenceSource string
 
+	// Reference carries the full benchmark, including the second
+	// provider's mid and how far the two diverged.
+	Reference refrate.Rate
+
 	// Floor is the loss percentage at the smallest size priced. It
 	// approximates the corridor's cost with price impact removed.
 	Floor decimal.Decimal
@@ -106,6 +111,36 @@ type LadderResult struct {
 
 // Viable reports whether any size produced a recommendable route.
 func (l *LadderResult) Viable() bool { return l.Recommended != nil }
+
+// Failed reports that no size was measured at all, because every request
+// failed before reaching an upstream.
+//
+// This is deliberately distinct from a corridor with no market. NO-MARKET is a
+// finding: the request succeeded and Horizon answered that no path exists.
+// Failed means the question was never put — and the two produce identical
+// zero-valued figures, so a caller that did not separate them would publish
+// "0.00% floor loss, nothing priced" as though it were a measurement of the
+// corridor rather than a measurement of the network.
+// The signal is the integrity state, not the error. Engine.Quote records an
+// unreachable upstream as a note rather than an error, so a rung whose request
+// never completed still arrives with Err nil and no quotes — identical in
+// shape to NO-MARKET. What separates them is that Horizon answering "no path"
+// yields IntegrityNoMarket, while a request that never landed leaves the state
+// IntegrityUnknown, because nothing was learned about the corridor's structure.
+func (l *LadderResult) Failed() bool {
+	if len(l.Rungs) == 0 {
+		return true
+	}
+	for _, r := range l.Rungs {
+		if r.Err != nil || r.Result == nil {
+			continue
+		}
+		if r.Result.Integrity != IntegrityUnknown {
+			return false
+		}
+	}
+	return true
+}
 
 // Ladder prices a corridor at every size and summarises the curve.
 //
@@ -181,6 +216,7 @@ func (l *LadderResult) summarise() {
 		if l.ReferenceMid.IsZero() {
 			l.ReferenceMid = r.Result.ReferenceMid
 			l.ReferenceSource = r.Result.ReferenceSource
+			l.Reference = r.Result.Reference
 		}
 
 		switch r.Result.Integrity {
