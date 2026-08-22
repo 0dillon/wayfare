@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -52,9 +53,18 @@ type SEP10EndpointResponds struct {
 	ProbeAccount string
 }
 
-// probeAccount is a syntactically valid account used purely to ask for a
-// challenge. Nothing is signed with it and no key for it exists or is needed.
-const probeAccount = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF5"
+// probeAccount is the canonical all-zero ed25519 account: StrKey version byte
+// 0x30, thirty-two zero bytes, and a correct CRC16 checksum.
+//
+// It is used purely to ask for a challenge. Nothing is signed with it, and no
+// private key for it exists or is needed — a SEP-10 server issues a challenge
+// to any well-formed account, whether or not it is funded.
+//
+// The checksum matters more than it looks. An earlier version of this constant
+// had an invalid one, so every anchor correctly rejected it with HTTP 400 and
+// this check reported a false failure against a perfectly healthy endpoint.
+// Verified against Horizon and a live anchor before being committed.
+const probeAccount = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
 
 // Describe implements Check.
 func (SEP10EndpointResponds) Describe() Descriptor {
@@ -144,12 +154,28 @@ func (c SEP10EndpointResponds) Run(ctx context.Context, s Subject) CheckResult {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		// Read the body: an anchor rejecting *our probe account* is our
+		// problem, not a defect in its endpoint. Blaming the anchor for a
+		// request we malformed is exactly the false failure this check
+		// produced when its probe account had a bad checksum.
+		msg := errorMessage(resp.Body)
+		if rejectsProbe(msg) {
+			return Undetermined(d, s,
+				fmt.Sprintf("the endpoint rejected the probe account rather than failing: %q. "+
+					"This is a defect in the probe, not in the anchor.", msg),
+				Evidence{Source: probeURL,
+					Observed:   fmt.Sprintf("HTTP %d: %s", resp.StatusCode, msg),
+					ObservedAt: at})
+		}
+
+		observed := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		if msg != "" {
+			observed += ": " + msg
+		}
 		return Fail(d, s,
 			fmt.Sprintf("the declared SEP-10 endpoint returned HTTP %d rather than a challenge",
 				resp.StatusCode),
-			Evidence{Source: probeURL,
-				Observed:   fmt.Sprintf("HTTP %d", resp.StatusCode),
-				ObservedAt: at})
+			Evidence{Source: probeURL, Observed: observed, ObservedAt: at})
 	}
 
 	var body struct {
@@ -198,4 +224,39 @@ func buildChallengeURL(endpoint, account string) (string, error) {
 	q.Set("account", account)
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// errorMessage extracts an anchor's JSON error string, if it sent one.
+func errorMessage(r io.Reader) string {
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(r).Decode(&body); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(body.Error)
+}
+
+// rejectsProbe reports whether an error names the account we supplied.
+//
+// Deliberately conservative: it matches only phrasings that clearly refer to
+// the account argument. A broader match would let a genuinely broken endpoint
+// excuse itself by mentioning the word "account" in an unrelated error.
+func rejectsProbe(msg string) bool {
+	if msg == "" {
+		return false
+	}
+	m := strings.ToLower(msg)
+	for _, phrase := range []string{
+		"public key",
+		"invalid account",
+		"account is invalid",
+		"malformed account",
+		"invalid ed25519",
+	} {
+		if strings.Contains(m, phrase) {
+			return true
+		}
+	}
+	return false
 }

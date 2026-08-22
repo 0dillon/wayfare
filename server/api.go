@@ -17,6 +17,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/Wayfare-labs/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/checks"
 	"github.com/Wayfare-labs/wayfare/route"
 	"github.com/Wayfare-labs/wayfare/runstore"
 )
@@ -28,6 +29,12 @@ type Server struct {
 	// Store is the measurement history. Optional: with none, a failed live
 	// measurement is an error, exactly as it was before history existed.
 	Store runstore.Store
+
+	// Checks runs counterparty checks alongside a measurement. Nil disables
+	// them, and the response then carries no findings block at all — absent
+	// and empty must not look the same, since one means "not checked" and
+	// the other means "checked, nothing found".
+	Checks *checks.Runner
 
 	// HistoryFirst serves the most recent stored run instead of measuring,
 	// unless the caller asks for a live reading with ?live=1.
@@ -155,7 +162,16 @@ func (s *Server) handleCorridor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, route.ToCorridorJSON(res, pegBase+"/"+pegQuote))
+	out := route.ToCorridorJSON(res, pegBase+"/"+pegQuote)
+
+	// Checks run after the measurement and cannot alter it. route.WithFindings
+	// is the only composition point and branches on nothing — see the
+	// composition rule in docs/checks.md.
+	if s.Checks != nil {
+		out = route.WithFindings(out, s.Checks.ForAsset(ctx, recvAsset))
+	}
+
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {

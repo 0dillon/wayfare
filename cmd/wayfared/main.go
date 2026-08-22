@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/Wayfare-labs/wayfare"
+	"github.com/Wayfare-labs/wayfare/checks"
 	"github.com/Wayfare-labs/wayfare/dex"
 	"github.com/Wayfare-labs/wayfare/monitor"
 	"github.com/Wayfare-labs/wayfare/refrate"
@@ -143,6 +144,7 @@ func main() {
 			Store:        store,
 			Timeout:      *timeout,
 			HistoryFirst: *histFirst,
+			Checks:       &checks.Runner{HorizonURL: *horizon},
 		}
 		httpSrv := &http.Server{
 			Addr:              *addr,

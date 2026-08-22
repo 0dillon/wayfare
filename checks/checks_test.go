@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"encoding/base32"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -563,5 +564,99 @@ func TestRunAllKeepsGoing(t *testing.T) {
 	}
 	if results[1].Determined != true || !results[1].Passed {
 		t.Error("the check after the panicking one did not run correctly")
+	}
+}
+
+// TestSEP10ProbeAccountIsWellFormed pins the checksum.
+//
+// This constant had an invalid CRC once, so every anchor correctly rejected it
+// with HTTP 400 and the check reported a false failure against healthy
+// endpoints. A check that blames a subject for the checker's own malformed
+// request is worse than no check, so the encoding is verified here rather than
+// trusted.
+func TestSEP10ProbeAccountIsWellFormed(t *testing.T) {
+	const addr = probeAccount
+
+	if len(addr) != 56 {
+		t.Fatalf("length = %d, want 56", len(addr))
+	}
+	if addr[0] != 'G' {
+		t.Fatalf("first byte = %q, want 'G' (ed25519 public key)", addr[0])
+	}
+
+	raw, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(addr)
+	if err != nil {
+		t.Fatalf("not valid base32: %v", err)
+	}
+	if len(raw) != 35 {
+		t.Fatalf("decoded length = %d, want 35 (version + 32 payload + 2 checksum)", len(raw))
+	}
+	if raw[0] != 0x30 {
+		t.Errorf("version byte = %#x, want 0x30", raw[0])
+	}
+
+	want := crc16XModem(raw[:33])
+	got := uint16(raw[33]) | uint16(raw[34])<<8
+	if got != want {
+		t.Errorf("checksum = %#04x, want %#04x — this address would be rejected "+
+			"by every anchor and Horizon", got, want)
+	}
+}
+
+func crc16XModem(data []byte) uint16 {
+	var crc uint16
+	for _, b := range data {
+		crc ^= uint16(b) << 8
+		for i := 0; i < 8; i++ {
+			if crc&0x8000 != 0 {
+				crc = crc<<1 ^ 0x1021
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc
+}
+
+// TestSEP10RejectedProbeIsUndetermined covers the other half of that bug.
+//
+// An anchor rejecting our probe account is our defect, not its. Reporting it
+// as a failure would blame a healthy endpoint for a request we malformed.
+func TestSEP10RejectedProbeIsUndetermined(t *testing.T) {
+	for _, msg := range []string{
+		`{"error":"Invalid Ed25519 Public Key: GAAA"}`,
+		`{"error":"invalid account"}`,
+		`{"error":"malformed account id"}`,
+	} {
+		srv := flagServer(t, 400, msg)
+		r := Run(ctx(), SEP10EndpointResponds{HTTPClient: srv.Client()},
+			Subject{Profile: sep10Profile(srv.URL + "/auth")})
+
+		if r.Determined {
+			t.Errorf("%s: reported a determined result; an endpoint rejecting our "+
+				"probe account is the checker's defect, not the anchor's", msg)
+		}
+		if !strings.Contains(r.Reason, "defect in the probe") {
+			t.Errorf("%s: reason %q should name the probe as the problem", msg, r.Reason)
+		}
+	}
+}
+
+// TestSEP10GenuineErrorStillFails is the control: a 500, or a 400 that does
+// not name our account, remains a real failure.
+func TestSEP10GenuineErrorStillFails(t *testing.T) {
+	for _, body := range []string{
+		`{"error":"internal server error"}`,
+		`{"error":"service temporarily unavailable"}`,
+		`{}`,
+	} {
+		srv := flagServer(t, 400, body)
+		r := Run(ctx(), SEP10EndpointResponds{HTTPClient: srv.Client()},
+			Subject{Profile: sep10Profile(srv.URL + "/auth")})
+
+		if !r.Failed() {
+			t.Errorf("%s: should still be a determined failure, got determined=%v passed=%v",
+				body, r.Determined, r.Passed)
+		}
 	}
 }

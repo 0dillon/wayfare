@@ -110,6 +110,33 @@ func KnownCodes() []string {
 	return codes
 }
 
+// homeDomains maps a verified issuer to the domain publishing its stellar.toml.
+//
+// Only issuers whose document was read directly appear here. The mapping is
+// what lets a check resolve an asset to the anchor that declares it, and an
+// unverified entry would send a checker to somebody else's document — which is
+// the identity confusion this package refuses everywhere else.
+//
+// USDC is deliberately absent: its issuer is still unverified against Circle's
+// own stellar.toml, so no domain can be claimed for it yet.
+var homeDomains = map[string]string{
+	LinkIOIssuer: "ngnc.online",
+}
+
+// HomeDomain reports the domain publishing an asset's stellar.toml, when the
+// association has been verified.
+//
+// Returns false rather than guessing. A checker with no domain reports that it
+// could not determine something, which is correct; one sent to a guessed
+// domain would report a confident finding about the wrong anchor.
+func HomeDomain(a Asset) (string, bool) {
+	if a.Kind != KindStellar || a.Issuer == "" {
+		return "", false
+	}
+	d, ok := homeDomains[a.Issuer]
+	return d, ok
+}
+
 // FiatPeg reports the ISO-4217 currency a Stellar token claims to track, and
 // whether the token is a known fiat-pegged asset at all.
 //
