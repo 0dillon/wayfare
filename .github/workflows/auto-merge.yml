@@ -9,18 +9,35 @@
 # change is *good* — that is the maintainer's job, and anything this workflow
 # cannot verify mechanically is handed over rather than guessed at.
 #
-# SECURITY NOTE: this runs on pull_request_target, which carries a write token
-# and runs the BASE branch's workflow definition. It therefore never checks out
-# or executes pull request code — it only inspects metadata through the API.
+# SECURITY NOTE: this runs on pull_request_target and workflow_run. Both carry
+# a write token and both run the BASE branch's workflow definition, including
+# for pull requests from forks. It therefore never checks out or executes pull
+# request code — it only inspects metadata through the API.
+#
 # Adding a checkout of the PR head to this file would turn it into a
-# code-execution vector for anyone who can open a PR.
+# code-execution vector for anyone who can open a pull request. workflow_run
+# makes that worse rather than better: it is documented as the way to gain
+# privilege after an intentionally unprivileged workflow, which is precisely
+# the privilege an attacker would be reaching for.
 
 name: auto-merge
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
-  check_suite:
+
+  # Re-evaluate once CI finishes.
+  #
+  # This was check_suite: completed, which never fired. GitHub documents the
+  # reason: "To prevent recursive workflows, this event does not trigger
+  # workflows if the check suite was created by GitHub Actions." Our CI is
+  # GitHub Actions, so the gate correctly reported "will re-evaluate when they
+  # finish" on the pull_request_target run and then nothing ever did.
+  #
+  # workflow_run has no such restriction and carries a write token, which is
+  # what this needs.
+  workflow_run:
+    workflows: ["CI"]
     types: [completed]
 
 permissions:
@@ -29,7 +46,7 @@ permissions:
   checks: read
 
 concurrency:
-  group: auto-merge-${{ github.event.pull_request.number || github.event.check_suite.id }}
+  group: auto-merge-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
   cancel-in-progress: true
 
 jobs:
@@ -43,6 +60,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           EVENT_PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
@@ -52,7 +70,9 @@ jobs:
           # ---------------------------------------------------------------
           PR="${EVENT_PR:-}"
           if [ -z "$PR" ] || [ "$PR" = "null" ]; then
-            PR=$(gh api "repos/$REPO/commits/${{ github.event.check_suite.head_sha }}/pulls" \
+            # A workflow_run event names only the commit, so resolve the PR
+            # from its head SHA.
+            PR=$(gh api "repos/$REPO/commits/${HEAD_SHA}/pulls" \
                    --jq '.[0].number // empty' 2>/dev/null || true)
           fi
           if [ -z "$PR" ]; then
