@@ -60,6 +60,13 @@ type CorridorJSON struct {
 	ReferenceNote            string `json:"reference_note,omitempty"`
 	Scored                   bool   `json:"scored"`
 
+	// ReferenceFetchedAt is when the rate was last obtained from the
+	// provider, which differs from reference_as_of: as-of is the upstream's
+	// own stamp, fetched-at is when we asked. A cached rate has an older
+	// fetched-at, and a client showing only one of the two cannot tell a
+	// current figure from a reused one.
+	ReferenceFetchedAt string `json:"reference_fetched_at,omitempty"`
+
 	Floor     string `json:"floor_loss_pct"`
 	FloorSize string `json:"floor_size"`
 	WorstLoss string `json:"worst_loss_pct"`
@@ -131,6 +138,9 @@ func ToCorridorJSON(l *LadderResult, pair string) CorridorJSON {
 	if !l.Reference.SecondaryMid.IsZero() {
 		out.ReferenceSecondaryMid = l.Reference.SecondaryMid.String()
 		out.ReferenceSecondarySource = l.Reference.SecondarySource
+	}
+	if !l.Reference.FetchedAt.IsZero() {
+		out.ReferenceFetchedAt = l.Reference.FetchedAt.UTC().Format(time.RFC3339)
 	}
 	if !l.Reference.DivergencePct.IsZero() {
 		out.ReferenceDivergencePct = l.Reference.DivergencePct.StringFixed(4)

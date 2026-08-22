@@ -36,6 +36,13 @@ type Rate struct {
 	AsOf   time.Time
 	Source string // provider identity, surfaced so users can audit it
 
+	// FetchedAt is when this project last obtained the rate from the
+	// provider, which is a different question from AsOf: AsOf is when the
+	// upstream says the rate was set, FetchedAt is when we asked. A cached
+	// rate has an older FetchedAt and an unchanged AsOf, and a reader needs
+	// both to judge whether a figure is current.
+	FetchedAt time.Time
+
 	// Cross-check fields, populated by Cross when a second provider
 	// answered. Mid and Source above always name the rate that was scored
 	// against; these name the other one.
