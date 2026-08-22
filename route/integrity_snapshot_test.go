@@ -190,3 +190,67 @@ func TestRecordedLadderFindingsMatchTheirState(t *testing.T) {
 		})
 	}
 }
+
+// TestNoMarketIsNotAFailedMeasurement separates the two ways a ladder comes
+// back with no prices.
+//
+// KESC genuinely has no market: Horizon answered, and the answer was that no
+// path exists. An unreachable Horizon produces an identically-shaped result —
+// no quotes, zero figures — but has learned nothing about the corridor. A
+// caller that conflated them would publish "0.00% floor loss" as a measurement
+// of the corridor when it was a measurement of the network.
+func TestNoMarketIsNotAFailedMeasurement(t *testing.T) {
+	m := loadSnap(t, "usdc-kesc")
+	e := engineOver(m, "USD/KES", "129.4263")
+
+	res, err := e.Ladder(context.Background(), route.LadderRequest{
+		SendAsset:      asset.USDC(),
+		ReceiveAsset:   asset.KESC(),
+		Sizes:          route.DefaultSizes,
+		ReferenceBase:  "USD",
+		ReferenceQuote: "KES",
+	})
+	if err != nil {
+		t.Fatalf("Ladder: %v", err)
+	}
+
+	if res.Integrity != route.IntegrityNoMarket {
+		t.Fatalf("Integrity = %s, want NO-MARKET", res.Integrity)
+	}
+	if res.Failed() {
+		t.Error("a corridor Horizon answered about is a measurement, not a failure; " +
+			"reporting it as failed would discard a real finding")
+	}
+}
+
+// TestUnreachableUpstreamIsAFailedMeasurement is the other side: every request
+// failing at the transport must report as a failure even though the engine
+// records it as a note rather than an error.
+func TestUnreachableUpstreamIsAFailedMeasurement(t *testing.T) {
+	e := &route.Engine{
+		// A port nothing is listening on.
+		DEX: &dex.Client{HorizonURL: "http://127.0.0.1:1"},
+		RefRate: refrate.NewStatic(map[string]decimal.Decimal{
+			"USD/NGN": decimal.RequireFromString("1350"),
+		}),
+	}
+
+	res, err := e.Ladder(context.Background(), route.LadderRequest{
+		SendAsset:      asset.USDC(),
+		ReceiveAsset:   asset.NGNC(),
+		Sizes:          []decimal.Decimal{decimal.RequireFromString("100")},
+		ReferenceBase:  "USD",
+		ReferenceQuote: "NGN",
+	})
+	if err != nil {
+		t.Fatalf("Ladder returned an error: %v", err)
+	}
+
+	if !res.Failed() {
+		t.Error("every request failed at the transport, but the ladder reports a measurement")
+	}
+	if res.Integrity != route.IntegrityUnknown {
+		t.Errorf("Integrity = %s, want UNKNOWN: nothing was learned about the corridor",
+			res.Integrity)
+	}
+}

@@ -75,9 +75,31 @@ type CorridorJSON struct {
 	Recommended     *QuoteJSON `json:"recommended"`
 	RecommendedSize string     `json:"recommended_size,omitempty"`
 
+	// Live is true for a measurement taken now, false for one replayed from
+	// the run store because a live fetch failed. It is present on every
+	// response, never omitted, so a client that ignores the field cannot
+	// mistake a stored reading for a fresh one by its absence.
+	Live bool `json:"live"`
+
+	// Stale describes the stored reading's age, and is present only when
+	// Live is false.
+	Stale *StaleJSON `json:"stale,omitempty"`
+
 	Finding    string     `json:"finding"`
 	Rungs      []RungJSON `json:"rungs"`
 	MeasuredAt string     `json:"measured_at"`
+}
+
+// StaleJSON labels a reading served from history rather than measured now.
+//
+// Nothing is ever fabricated to fill a gap: when a live fetch fails and no
+// stored run exists, the request errors rather than returning a plausible
+// number. This struct exists so the case where a stored run does exist is
+// unmistakable.
+type StaleJSON struct {
+	RecordedAt string `json:"recorded_at"`
+	AgeSeconds int64  `json:"age_seconds"`
+	AgeHuman   string `json:"age_human"`
 }
 
 type AssetJSON struct {
@@ -131,6 +153,7 @@ func ToCorridorJSON(l *LadderResult, pair string) CorridorJSON {
 		WorstLoss:          l.WorstLoss.StringFixed(2),
 		WorstSize:          l.WorstSize.String(),
 		Recommended:        ToQuoteJSON(l.Recommended),
+		Live:               true,
 		Finding:            l.Finding,
 		Rungs:              make([]RungJSON, 0, len(l.Rungs)),
 		MeasuredAt:         time.Now().UTC().Format(time.RFC3339),

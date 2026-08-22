@@ -285,3 +285,8 @@ func TestHealthz(t *testing.T) {
 		t.Errorf("healthz = %d %v", status, body)
 	}
 }
+
+// dexClientAt builds a dex client pointed at a test Horizon.
+func dexClientAt(url string) *dex.Client {
+	return &dex.Client{HorizonURL: url}
+}

@@ -1,0 +1,16 @@
+# Test fixtures are large and are not needed at runtime. The snapshots alone
+# are several hundred kilobytes of recorded mainnet responses.
+testdata/
+**/testdata/
+
+.git/
+.github/
+bin/
+dist/
+docs/
+*.md
+!README.md
+
+coverage.out
+coverage.html
+*.log
