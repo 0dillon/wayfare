@@ -81,6 +81,33 @@ unflattering to the project's own thesis, publish it unflattering.
 SEP-1 documents say. It does not characterise intent, and it distinguishes
 what was measured from what was inferred.
 
+## Maintainer-owned areas
+
+Not contributor work, because an error in any of them invalidates published
+measurements rather than breaking a feature:
+
+- `dex` pricing arithmetic
+- the verdict thresholds
+- the integrity taxonomy
+- SEP-38 fee handling
+- the check engine and how results compose
+- the corridor health score, when it exists
+
+**This is about blast radius, not gatekeeping.** Individual checks and metrics
+are exactly the contribution this project wants — see
+[docs/checks.md](docs/checks.md) and the issues labelled `good first issue`.
+
+### What the labels mean
+
+Contributors have to be able to trust these:
+
+- **`blocked`** — do not start. It waits on something that does not exist yet
+- **`needs-maintainer-review`** — the design is not settled, and a PR may be
+  rejected on approach rather than on execution. Agree the shape first
+- `difficulty:easy` — well-scoped, a few hours
+- `difficulty:medium` — multi-file, needs design judgement
+- `difficulty:hard` — architectural; discuss before building
+
 ## Code conventions
 
 - Comments explain *why*, not *what*. The code already says what it does.

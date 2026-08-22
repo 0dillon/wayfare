@@ -73,49 +73,80 @@ stablecoin → fiat-token corridor.
 
 ## Architecture
 
+Organised by **epistemic status** — what is observed, what is computed from
+observation, what is inferred, and what is published. The ordering carries a
+rule:
+
+> **A layer can never be more certain than the layer beneath it.**
+
+A layer 2 calculation built on an unavailable layer 1 fact is *unknown*, not a
+default. A layer 4 output publishing a layer 3 estimate as fact is the specific
+failure this project exists to avoid.
+
 ```
-        ┌──────────────────┐        ┌────────────────────────────┐
-        │ Horizon          │        │ Reference providers        │
-        │ /paths/strict-   │        │ exchangerate-api           │
-        │ send  (mainnet)  │        │ currency-api               │
-        └────────┬─────────┘        └──────────────┬─────────────┘
-                 │                        cached, cross-checked
-                 │                        for divergence
-                 │                                 │
-                 ▼                                 ▼
-        ┌────────────────────────────────────────────────────────┐
-        │  route.Engine                                          │
-        │    ladder sweep: 0.1 → 5000, priced concurrently       │
-        │    per size:  effective rate → loss vs mid → verdict   │
-        │    per corridor:  integrity  (structure, not price)    │
-        └───────────────────────────┬────────────────────────────┘
-                                    │
-                     ┌──────────────┴──────────────┐
-                     │                             │
-                     ▼                             ▼
-        ┌────────────────────────┐   ┌──────────────────────────┐
-        │ monitor.Scheduler      │   │ server.Server            │
-        │   every 6h, headless   │   │   /api/corridor  (live)  │
-        └───────────┬────────────┘   │   /  single-file UI      │
-                    │                └────────────┬─────────────┘
-                    ▼                             │ on failure
-        ┌────────────────────────┐                │ serve last run,
-        │ runstore  (hash chain) │◀───────────────┘ labelled stale
-        │   NDJSON, append-only  │
-        │   prev_hash → hash     │
-        └────────────────────────┘
+LAYER 1 — OBSERVABLE FACTS                                        [live]
+  Horizon pathfinding, order books, issuer flags, SEP-1 documents
+  packages: dex, anchor, asset, sep38, snapshot
+
+        │  every figure below traces to one of these, or is unknown
+        ▼
+
+LAYER 2 — DETERMINISTIC CALCULATION                               [live]
+  effective rate, loss vs mid, integrity state, spread, depth,
+  divergence between reference providers
+  packages: route, refrate, checks
+
+        │
+        ▼
+
+LAYER 3 — PROBABILISTIC INTELLIGENCE            [not built — needs history]
+  failure probability, expected slippage, anomaly detection,
+  route deterioration, VaR/CVaR, route optimisation
+
+        │  blocked on months of runstore history that does not exist yet
+        ▼
+
+LAYER 4 — VERIFIABLE OUTPUT                 [not built — needs a trust model]
+  signed or on-chain corridor attestation consumable by other protocols
+```
+
+Layers 3 and 4 have **no packages and no stubs**, deliberately. Speculative
+structure is worse than none: an empty package invites code that has no inputs
+yet.
+
+### How the pieces fit
+
+```
+     Horizon pathfinding          Reference providers (×2)
+     order books, issuer flags    cached, cross-checked for divergence
+              │                              │
+              └──────────────┬───────────────┘
+                             ▼
+                   route.Engine  ── ladder sweep 0.1 → 5000
+                             │      per size:     rate → loss → verdict
+                             │      per corridor: integrity
+                             ▼
+                        checks.Runner ── counterparty facts
+                             │           (qualify; never move the headline)
+              ┌──────────────┴───────────────┐
+              ▼                              ▼
+     monitor.Scheduler                 server.Server
+     every 6h, headless                /api/corridor, single-file UI
+              │                              │ on failure: last stored run,
+              ▼                              │ labelled live:false
+     runstore ── hash-chained NDJSON ◀───────┘
 ```
 
 Two things about this shape are deliberate.
 
-**The scheduler does not depend on the server.** `monitor` imports nothing
-from `server`, and `wayfared -serve=false` runs measurements with no HTTP at all.
-A monitor that only measures while somebody has a page open would leave holes
-in its history exactly where nobody was looking.
+**The scheduler does not depend on the server.** `monitor` imports nothing from
+`server`, and `wayfared -serve=false` measures with no HTTP at all. A monitor
+that only measures while somebody has a page open would leave holes in its
+history exactly where nobody was looking.
 
-**The store is downstream of everything.** Nothing reads from it to produce a
-measurement; it is read only when a live measurement fails, and then the
-response says so.
+**Checks sit downstream of the measurement.** They observe the counterparties a
+corridor depends on and are attached to the result; nothing they report can
+alter an integrity state or a verdict. See the composition rule below.
 
 ---
 
@@ -189,6 +220,38 @@ Beyond 10% the feeds are not disagreeing about the rate, they are measuring
 different things, and a verdict would be an artefact of which one was believed.
 `scored_against` names the mid that produced the verdicts you are reading.
 
+### Check results — breaking if altered
+
+Checks observe facts about the counterparties a corridor depends on. Three
+states, and the third is the point:
+
+| State | Meaning |
+|:---|:---|
+| determined + passed | The check ran and the fact holds |
+| determined + failed | The check ran and the fact does not hold |
+| **not determined** | The check could not establish either way — **not a failure** |
+
+An anchor that publishes no SEP-10 endpoint is a different fact from one whose
+endpoint is dead, and both differ from one that works. `determined` is a
+separate field from `passed`, so unknown cannot be expressed as a zero or a
+false, and every undetermined result carries a reason.
+
+> **Checks qualify the headline. They never move it.**
+
+No result, at any severity, may change `integrity` or a verdict. Those are
+derived from pathfinding and a reference rate; letting observations about third
+parties rewrite them would make the headline unfalsifiable — a reader could no
+longer tell whether a corridor was downgraded because its liquidity moved or
+because someone added a check. Enforced in code, not documented: `WithFindings`
+branches on nothing.
+
+**Metrics are a separate shape from checks.** A quantity like spread or depth
+returns a value and a unit, not a verdict. Forcing a measurement through
+pass/fail discards the number that carries the meaning. Thresholding a metric
+into a verdict is maintainer-owned.
+
+Full spec: **[docs/checks.md](docs/checks.md)**
+
 ### Asset identity — breaking if altered
 
 An asset code identifies nothing; **the issuer account is the identity.**
@@ -234,6 +297,7 @@ Full spec: **[docs/run-store.md](docs/run-store.md)**
 | `sep38` | Anchor RFQ client, with the fee-denomination identity |
 | `dex` | On-chain pricing via Horizon pathfinding, plus market health |
 | `route` | Ladder sweep, verdicts, integrity, and the shared wire shape |
+| `checks` | Counterparty checks and metrics; qualify the headline, never move it |
 | `runstore` | Hash-chained measurement history |
 | `monitor` | Scheduled measurement, independent of HTTP |
 | `snapshot` | Record and replay upstream responses |
@@ -279,34 +343,40 @@ nothing is ever synthesised to fill the gap.
 
 ## Roadmap
 
-Capability-based, no dates.
+Capability-based, no dates. The version names track the layer model above.
 
-**v0.1 — Measure.** *Largely done.* Ladder sweep, verdicts, the integrity
-taxonomy, cross-checked reference rates, recorded snapshots, pinned
-arithmetic. Remaining: `refrate` unit tests, fixture consolidation, and
-verifying the USDC issuer against Circle's own `stellar.toml`.
+**v1 — Quote engine.** *Done.* Ladder sweep, verdicts, integrity taxonomy,
+cross-checked reference rates, recorded snapshots, pinned arithmetic.
 
-**v0.2 — Observe.** Run continuously at a public URL; chart the trend; alert
-when a corridor's integrity state changes. The store and scheduler exist; the
-deployment does not yet.
+**v2 — Corridor intelligence.** *In progress.* Counterparty checks and market
+quality metrics — spread, observed versus executable depth, price impact,
+liquidity concentration — each reported separately rather than blended into a
+score. Layers 1 and 2.
 
-**v0.3 — Broaden.** More corridors from more issuers, chained fiat
-dependencies beyond one intermediate, an explicit bridge-asset registry. The
-value of the taxonomy is comparative, and one issuer is not a comparison.
+**v3 — Quantitative execution risk.** Effective transfer cost decomposed into
+FX loss, fees, slippage and expected failure cost, each computed and reported
+separately. A route with a worse headline rate can be cheaper all-in, and
+showing that is the point. Expected failure cost stays **explicitly unknown**
+until failure history exists.
 
-**Later — direction only.**
+**v4 — ML-assisted prediction.** Layer 3. Failure probability, expected
+slippage, anomaly detection, route deterioration. Blocked on months of history:
+failure prediction needs observed failures, anomaly detection needs a baseline
+of normal, and `runstore` has been collecting for days. Training on that and
+publishing the output would break the project's central rule.
 
-*An on-chain attestation oracle* — publishing corridor integrity where
-contracts could read it. Deferred because it introduces a publisher-trust
-assumption the project does not currently have: today every figure is
-independently reproducible from recorded bytes, and an oracle asks readers to
-trust the publisher instead. That trade needs to be worth something first.
+**v5 — Verifiable attestations.** Layer 4. Signed or on-chain corridor
+integrity a contract could read. Deferred because it introduces a
+publisher-trust assumption the project does not currently have: today every
+figure is independently reproducible from recorded bytes, and an oracle asks
+readers to trust the publisher instead. That trade needs to be worth something
+first.
 
-*Integrator tooling* — SDKs, embeddable widgets. Deferred because it should
-follow demand rather than precede it. Building an SDK for users who do not
-exist is how a measurement tool becomes a platform nobody asked for.
-
----
+**Explicitly not planned.** Settlement primitives — escrow, custody, payment
+execution. Wayfare stopped being a router because measurement proved the
+corridor structurally broken at every size. It analyses corridors; it does not
+move money through them. If settlement ever earns a place it is a new project
+with its own evidence, not an extension of this one.
 
 ## Where to start
 
@@ -330,6 +400,10 @@ expect close review and discuss the approach first:
 - verdict thresholds
 - the integrity taxonomy
 - SEP-38 fee handling
+- the check engine and how results compose
+- the corridor health score — how signals become one published number. Not yet
+  designed, and deliberately so: it needs its components to exist first, and it
+  is a judgement of the same class as the verdict bands
 
 Everything else — UI, CLI, docs, tests, new corridors, reference providers,
 storage backends — is open. Adding a corridor is the highest-value first
