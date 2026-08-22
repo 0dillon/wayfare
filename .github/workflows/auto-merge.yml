@@ -53,9 +53,10 @@ permissions:
   pull-requests: write
   checks: read
 
-concurrency:
-  group: auto-merge-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
-  cancel-in-progress: true
+# No concurrency group: the script deduplicates comments via the
+# <!-- auto-merge-gate --> marker, and the workflow_run re-evaluation
+# after CI finishes must not be cancelled by the earlier pull_request_target
+# run — it is the one that sees the final check-runs state.
 
 jobs:
   gate:
@@ -71,6 +72,7 @@ jobs:
           ISSUE_PR: ${{ github.event.issue.number }}
           IS_PR: ${{ github.event.issue.pull_request.url }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          SELF_CHECK: check the merge gates
         run: |
           set -euo pipefail
 
@@ -173,8 +175,14 @@ jobs:
           # Neutral and skipped count as success; queued or in-progress means
           # we are simply not ready to decide yet.
           # ---------------------------------------------------------------
+          # This job's own check run is excluded. It is necessarily
+          # in_progress while it evaluates, so counting it would make the gate
+          # wait for itself forever — every run would report "1 check still
+          # running" and exit, and nothing would ever merge.
           runs=$(gh api --paginate "repos/$REPO/commits/$head_sha/check-runs" \
-                   --jq '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion // "-")"')
+                   | jq --arg self "$SELF_CHECK" -r \
+                   '.check_runs[] | select(.name != $self)
+                    | "\(.name)\t\(.status)\t\(.conclusion // "-")"')
 
           # No check runs reported yet is "too early to decide", not "nothing
           # to wait for". Treating an empty list as all-clear would merge a PR
@@ -218,17 +226,36 @@ jobs:
           # arrived yet, and the pull_request_review and issue_comment triggers
           # bring us back when it does.
           # ---------------------------------------------------------------
-          rabbit_reviews=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
-            --jq '[.[] | select(.user.login | test("coderabbit"; "i"))] | length')
-          rabbit_comments=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
-            --jq '[.[] | select(.user.login | test("coderabbit"; "i"))] | length')
-          rabbit_total=$(( rabbit_reviews + rabbit_comments ))
+          # Filter by commit_id so we read the review for *this* commit, not
+          # an older one left over from a previous push.
+          rabbit_body=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
+            | jq --arg sha "$head_sha" -r \
+            '[.[] | select(((.user | type) == "object")
+                          and ((.user.login // "") | test("coderabbit"; "i"))
+                          and (.commit_id == $sha))] | last | .body // ""')
 
-          echo "coderabbit: $rabbit_reviews review(s), $rabbit_comments comment(s)"
-
-          if [ "$rabbit_total" -eq 0 ]; then
+          if [ -z "$rabbit_body" ]; then
             echo "::notice::no CodeRabbit review yet; will re-evaluate when one arrives"
             exit 0
+          fi
+
+          # CodeRabbit opens its review with "Actionable comments posted: N".
+          # That number is the review verdict: zero means it found nothing it
+          # wants changed. Configured with request_changes_workflow: false it
+          # never blocks a merge itself, so this is the signal that carries
+          # whether the review was actually clean.
+          actionable=$(grep -oiE 'actionable comments posted:[[:space:]]*[0-9]+' <<<"$rabbit_body" \
+            | grep -oE '[0-9]+' | head -1 || true)
+
+          if [ -z "$actionable" ]; then
+            # Format changed, or the review is of a shape we do not recognise.
+            # Hold rather than guess: merging on an unparsed review would be
+            # claiming it passed without having read it.
+            reasons+=("CodeRabbit's review could not be parsed for a verdict, so it is not known to be clean")
+          elif [ "$actionable" -gt 0 ]; then
+            reasons+=("CodeRabbit raised $actionable actionable comment(s)")
+          else
+            echo "coderabbit: review clean (0 actionable comments)"
           fi
 
           # ---------------------------------------------------------------
@@ -319,7 +346,7 @@ jobs:
               echo "### What was verified"
               echo
               echo "- Every check green: $(awk -F'\t' '{print $1}' <<<"$runs" | paste -sd ', ' -)"
-              echo "- CodeRabbit reviewed this pull request"
+              echo "- CodeRabbit reviewed it and raised no actionable comments"
               [ -n "$scope_note" ] && echo "- Scope: $scope_note"
               echo "- No maintainer-owned path touched — nothing here can alter a published figure"
               echo "- No dependency change"
