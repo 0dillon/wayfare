@@ -7,7 +7,8 @@
 # second, softer gate whose failures are advisory but whose blocking is real.
 #
 # CodeRabbit's job here is to give a contributor a useful read before a human
-# looks. It is not a merge gate.
+# looks, and to produce structured fix instructions that an AI agent can
+# consume via @coderabbitai autofix.
 language: en-US
 
 reviews:
@@ -17,6 +18,10 @@ reviews:
   high_level_summary: true
   review_status: true
   poem: false
+
+  finishing_touches:
+    autofix:
+      enabled: true
 
   auto_review:
     enabled: true
@@ -31,6 +36,8 @@ reviews:
         data is unavailable: unknown must be reported as unknown, never
         defaulted, guessed or averaged away. Flag any figure presented to a
         user that did not come from a live source or a recorded snapshot.
+        When you find an issue, include a Prompt for AI Agents block with
+        exact fix instructions so @coderabbitai autofix can resolve it.
     - path: "**/*_test.go"
       instructions: >
         Tests must run from testdata/snapshots via snapshot.Replayer, never the
