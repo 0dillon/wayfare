@@ -40,6 +40,14 @@ on:
     workflows: ["CI"]
     types: [completed]
 
+  # A review or a bot comment re-fires the gate. Without these, CodeRabbit
+  # finishing after CI would never be noticed: workflow_run fires once, on CI
+  # completion, and by then the review may not exist yet.
+  pull_request_review:
+    types: [submitted, dismissed]
+  issue_comment:
+    types: [created]
+
 permissions:
   contents: write
   pull-requests: write
@@ -60,6 +68,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           EVENT_PR: ${{ github.event.pull_request.number }}
+          ISSUE_PR: ${{ github.event.issue.number }}
+          IS_PR: ${{ github.event.issue.pull_request.url }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
@@ -69,6 +79,13 @@ jobs:
           # PR indirectly, so fall back to querying by head SHA.
           # ---------------------------------------------------------------
           PR="${EVENT_PR:-}"
+
+          # issue_comment fires for issues as well as pull requests, and only
+          # the latter can be merged.
+          if { [ -z "$PR" ] || [ "$PR" = "null" ]; } && [ -n "${ISSUE_PR:-}" ]; then
+            PR="${ISSUE_PR}"
+          fi
+
           if [ -z "$PR" ] || [ "$PR" = "null" ]; then
             # A workflow_run event names only the commit, so resolve the PR
             # from its head SHA.
@@ -80,6 +97,13 @@ jobs:
             exit 0
           fi
           echo "evaluating PR #$PR"
+
+          # Ignore our own comments, or the gate re-triggers itself in a loop.
+          COMMENTER="${{ github.event.comment.user.login }}"
+          if [ "$COMMENTER" = "github-actions[bot]" ]; then
+            echo "comment was ours; nothing to re-evaluate"
+            exit 0
+          fi
 
           meta=$(gh api "repos/$REPO/pulls/$PR")
           draft=$(jq -r '.draft' <<<"$meta")
@@ -183,12 +207,41 @@ jobs:
           fi
 
           # ---------------------------------------------------------------
+          # GATE 6 — CodeRabbit has actually reviewed this commit.
+          #
+          # The merge comment says a CodeRabbit review passed, so that has to
+          # be true rather than assumed. Claiming a review happened when it did
+          # not would be exactly the kind of unverified assertion this project
+          # refuses everywhere else.
+          #
+          # Absent is "wait", not "hold": the review may simply not have
+          # arrived yet, and the pull_request_review and issue_comment triggers
+          # bring us back when it does.
+          # ---------------------------------------------------------------
+          rabbit_reviews=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
+            --jq '[.[] | select(.user.login | test("coderabbit"; "i"))] | length')
+          rabbit_comments=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '[.[] | select(.user.login | test("coderabbit"; "i"))] | length')
+          rabbit_total=$(( rabbit_reviews + rabbit_comments ))
+
+          echo "coderabbit: $rabbit_reviews review(s), $rabbit_comments comment(s)"
+
+          if [ "$rabbit_total" -eq 0 ]; then
+            echo "::notice::no CodeRabbit review yet; will re-evaluate when one arrives"
+            exit 0
+          fi
+
+          # ---------------------------------------------------------------
           # Decide.
           # ---------------------------------------------------------------
           if [ ${#reasons[@]} -eq 0 ]; then
             echo "all gates satisfied; merging"
             gh pr merge "$PR" --repo "$REPO" --squash --delete-branch
-            gh pr comment "$PR" --repo "$REPO" --body "Merged automatically: no maintainer-owned path touched, no dependency change, checklist confirmed, all checks green. Auto-merge only lands what it can verify mechanically — it forms no judgement about whether a change is right, which is safe here because nothing it touched can alter a published figure."
+            gh pr comment "$PR" --repo "$REPO" --body "**Approved. All CI checks and CodeRabbit review passed.**
+
+            Merged automatically: no maintainer-owned path touched, no dependency change, checklist confirmed, every check green, and CodeRabbit has reviewed.
+
+            Auto-merge only lands what it can verify mechanically. It forms no judgement about whether a change is *right* — that stays with the maintainer, and is safe to defer here because nothing this PR touched can alter a published figure."
             exit 0
           fi
 
