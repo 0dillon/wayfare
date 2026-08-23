@@ -30,6 +30,22 @@ type CheckJSON struct {
 	ObservedAt string         `json:"observed_at"`
 }
 
+// MetricJSON is one metric result on the wire.
+type MetricJSON struct {
+	ID      string `json:"id"`
+	Scope   string `json:"scope"`
+	Subject string `json:"subject"`
+
+	Determined bool   `json:"determined"`
+	Reason     string `json:"reason,omitempty"`
+	Value      string `json:"value,omitempty"`
+	Unit       string `json:"unit"`
+	Summary    string `json:"summary"`
+
+	Evidence   []EvidenceJSON `json:"evidence"`
+	ObservedAt string         `json:"observed_at"`
+}
+
 // FindingsJSON is a corridor's check results.
 //
 // It carries counts so a client can render a summary without walking the list,
@@ -45,6 +61,9 @@ type FindingsJSON struct {
 	// WorstSeverity is the highest severity among *failed* checks, empty
 	// when nothing failed. Undetermined results never contribute.
 	WorstSeverity string `json:"worst_severity,omitempty"`
+
+	// Metrics are measured quantities, reported alongside checks.
+	Metrics []MetricJSON `json:"metrics,omitempty"`
 }
 
 // ToJSON renders findings for the wire, ordered for display.
@@ -78,5 +97,34 @@ func (f *Findings) ToJSON() FindingsJSON {
 		}
 		out.Checks = append(out.Checks, c)
 	}
+
+	if len(f.Metrics) > 0 {
+		out.Metrics = make([]MetricJSON, 0, len(f.Metrics))
+		for _, m := range f.Metrics {
+			mj := MetricJSON{
+				ID:         m.ID,
+				Scope:      m.Scope.String(),
+				Subject:    m.Subject,
+				Determined: m.Determined,
+				Reason:     m.Reason,
+				Unit:       string(m.Unit),
+				Summary:    m.Summary,
+				Evidence:   make([]EvidenceJSON, 0, len(m.Evidence)),
+				ObservedAt: m.At.UTC().Format(time.RFC3339),
+			}
+			if m.Determined {
+				mj.Value = m.Value.String()
+			}
+			for _, e := range m.Evidence {
+				mj.Evidence = append(mj.Evidence, EvidenceJSON{
+					Source:     e.Source,
+					Observed:   e.Observed,
+					ObservedAt: e.ObservedAt.UTC().Format(time.RFC3339),
+				})
+			}
+			out.Metrics = append(out.Metrics, mj)
+		}
+	}
+
 	return out
 }

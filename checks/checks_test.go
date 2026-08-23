@@ -6,12 +6,16 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/Wayfare-labs/wayfare/anchor"
 	"github.com/Wayfare-labs/wayfare/asset"
+	"github.com/Wayfare-labs/wayfare/dex"
 )
 
 func ctx() context.Context { return context.Background() }
@@ -751,5 +755,259 @@ func TestErrorBodyIsBounded(t *testing.T) {
 			t.Errorf("evidence retained %d bytes, exceeding the %d-byte bound",
 				len(e.Observed), maxErrorBody)
 		}
+	}
+}
+
+// spread metric ------------------------------------------------------------------
+
+func TestSpreadMetricFromRecordedBook(t *testing.T) {
+	raw, err := os.ReadFile("../dex/testdata/orderbook-xlm-ngnc.json")
+	if err != nil {
+		t.Fatalf("reading recorded order book: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/hal+json")
+		w.Write([]byte(raw))
+	}))
+	defer srv.Close()
+
+	m := SpreadMetric{DEX: &dex.Client{HorizonURL: srv.URL}}
+	r := RunMetric(ctx(), m, Subject{
+		Send:    asset.Native(),
+		Receive: asset.NGNC(),
+	})
+
+	if !r.Determined {
+		t.Fatalf("spread metric undetermined: %s", r.Reason)
+	}
+	if r.Unit != UnitPercent {
+		t.Errorf("unit = %s, want percent", r.Unit)
+	}
+	if !r.Value.IsPositive() {
+		t.Errorf("spread = %s, want positive on a real book", r.Value)
+	}
+	if len(r.Evidence) == 0 {
+		t.Error("no evidence recorded")
+	}
+	if r.Summary == "" {
+		t.Error("summary is empty")
+	}
+}
+
+func TestSpreadMetricEmptyBook(t *testing.T) {
+	bookServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/hal+json")
+		w.Write([]byte(`{"bids":[],"asks":[]}`))
+	}))
+	defer bookServer.Close()
+
+	m := SpreadMetric{DEX: &dex.Client{HorizonURL: bookServer.URL}}
+	r := RunMetric(ctx(), m, Subject{
+		Send:    asset.Native(),
+		Receive: asset.NGNC(),
+	})
+
+	if r.Determined {
+		t.Error("empty book must produce an undetermined result, not a zero spread")
+	}
+	if !strings.Contains(r.Reason, "empty") {
+		t.Errorf("reason = %q, want it to name the empty book", r.Reason)
+	}
+}
+
+func TestSpreadMetricOneSidedBook(t *testing.T) {
+	bookServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/hal+json")
+		w.Write([]byte(`{"bids":[],"asks":[{"price":"100","amount":"10"}]}`))
+	}))
+	defer bookServer.Close()
+
+	m := SpreadMetric{DEX: &dex.Client{HorizonURL: bookServer.URL}}
+	r := RunMetric(ctx(), m, Subject{
+		Send:    asset.Native(),
+		Receive: asset.NGNC(),
+	})
+
+	if r.Determined {
+		t.Error("one-sided book must produce an undetermined result")
+	}
+	if !strings.Contains(r.Reason, "nobody is buying") {
+		t.Errorf("reason = %q, want it to name the missing side", r.Reason)
+	}
+}
+
+func TestSpreadMetricNilDEX(t *testing.T) {
+	m := SpreadMetric{DEX: nil}
+	r := RunMetric(ctx(), m, Subject{
+		Send:    asset.Native(),
+		Receive: asset.NGNC(),
+	})
+
+	if r.Determined {
+		t.Error("nil DEX client must produce an undetermined result")
+	}
+}
+
+func TestSpreadMetricEmptySubject(t *testing.T) {
+	m := SpreadMetric{DEX: &dex.Client{HorizonURL: "http://example.invalid"}}
+	r := RunMetric(ctx(), m, Subject{})
+
+	if r.Determined {
+		t.Error("empty subject must produce an undetermined result")
+	}
+}
+
+func TestSpreadMetricDescriptorIsValid(t *testing.T) {
+	d := SpreadMetric{}.Describe()
+	if err := d.Validate(); err != nil {
+		t.Errorf("spread metric descriptor: %v", err)
+	}
+}
+
+// depth metric ------------------------------------------------------------------
+
+// horizonStub is a minimal test server that returns a canned response.
+func horizonStub(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(body))
+	}))
+}
+
+// ngncStrictSendResponse is the real Horizon body for USDC -> NGNC.
+func ngncStrictSendResponse() string {
+	return `{"_embedded":{"records":[{"source_asset_type":"credit_alphanum4","source_asset_code":"USDC","source_amount":"100.0000000","destination_asset_type":"credit_alphanum4","destination_asset_code":"NGNC","destination_amount":"65100.1379550","path":[{"asset_type":"native"}]},{"source_asset_type":"credit_alphanum4","source_asset_code":"USDC","source_amount":"100.0000000","destination_asset_type":"credit_alphanum4","destination_asset_code":"NGNC","destination_amount":"21785.7821141","path":[]}]}}`
+}
+
+func TestDepthObservedMetric(t *testing.T) {
+	raw, err := os.ReadFile("../dex/testdata/orderbook-xlm-ngnc.json")
+	if err != nil {
+		t.Fatalf("reading recorded order book: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/hal+json")
+		w.Write([]byte(raw))
+	}))
+	defer srv.Close()
+
+	m := DepthMetric{DEX: &dex.Client{HorizonURL: srv.URL}}
+	r := m.RunObserved(ctx(), Subject{
+		Send:    asset.Native(),
+		Receive: asset.NGNC(),
+	})
+
+	if !r.Determined {
+		t.Fatalf("depth observed metric undetermined: %s", r.Reason)
+	}
+	if r.Unit != UnitCount {
+		t.Errorf("unit = %s, want count", r.Unit)
+	}
+	if !r.Value.IsPositive() {
+		t.Errorf("level count = %s, want positive on a real book", r.Value)
+	}
+}
+
+func TestDepthExecutableMetric(t *testing.T) {
+	srv := horizonStub(t, ngncStrictSendResponse())
+	defer srv.Close()
+
+	m := DepthMetric{
+		DEX:   &dex.Client{HorizonURL: srv.URL},
+		Sizes: []decimal.Decimal{decimal.NewFromInt(1), decimal.NewFromInt(100)},
+	}
+	r := m.RunExecutable(ctx(), Subject{
+		Send:    asset.USDC(),
+		Receive: asset.NGNC(),
+	})
+
+	if !r.Determined {
+		t.Fatalf("depth executable metric undetermined: %s", r.Reason)
+	}
+	if r.Unit != UnitCount {
+		t.Errorf("unit = %s, want count", r.Unit)
+	}
+	if !r.Value.IsPositive() {
+		t.Errorf("executable amount = %s, want positive", r.Value)
+	}
+}
+
+func TestDepthNoPathsProducesUndetermined(t *testing.T) {
+	srv := horizonStub(t, `{"_embedded":{"records":[]}}`)
+	defer srv.Close()
+
+	m := DepthMetric{
+		DEX:   &dex.Client{HorizonURL: srv.URL},
+		Sizes: []decimal.Decimal{decimal.NewFromInt(1)},
+	}
+	r := m.RunExecutable(ctx(), Subject{
+		Send:    asset.USDC(),
+		Receive: asset.NGNC(),
+	})
+
+	if r.Determined {
+		t.Error("no paths must produce an undetermined result")
+	}
+}
+
+func TestDepthMetricDescriptorIsValid(t *testing.T) {
+	d := DepthMetric{}.Describe()
+	if err := d.Validate(); err != nil {
+		t.Errorf("depth metric descriptor: %v", err)
+	}
+}
+
+// price impact metric -----------------------------------------------------------
+
+func TestPriceImpactMetric(t *testing.T) {
+	// Stub returns same data for all sizes, so impact is zero.
+	srv := horizonStub(t, ngncStrictSendResponse())
+	defer srv.Close()
+
+	m := PriceImpactMetric{
+		DEX:       &dex.Client{HorizonURL: srv.URL},
+		ProbeSize: decimal.NewFromInt(1),
+		FullSize:  decimal.NewFromInt(100),
+	}
+	r := RunMetric(ctx(), m, Subject{
+		Send:    asset.USDC(),
+		Receive: asset.NGNC(),
+	})
+
+	if !r.Determined {
+		t.Fatalf("price impact metric undetermined: %s", r.Reason)
+	}
+	if r.Unit != UnitPercent {
+		t.Errorf("unit = %s, want percent", r.Unit)
+	}
+	if !r.Value.IsZero() {
+		t.Errorf("impact = %s, expected zero with fixed-response stub", r.Value)
+	}
+	if len(r.Evidence) == 0 {
+		t.Error("no evidence recorded")
+	}
+}
+
+func TestPriceImpactMetricNoPaths(t *testing.T) {
+	srv := horizonStub(t, `{"_embedded":{"records":[]}}`)
+	defer srv.Close()
+
+	m := PriceImpactMetric{DEX: &dex.Client{HorizonURL: srv.URL}}
+	r := RunMetric(ctx(), m, Subject{
+		Send:    asset.USDC(),
+		Receive: asset.NGNC(),
+	})
+
+	if r.Determined {
+		t.Error("no paths must produce an undetermined result")
+	}
+}
+
+func TestPriceImpactMetricDescriptorIsValid(t *testing.T) {
+	d := PriceImpactMetric{}.Describe()
+	if err := d.Validate(); err != nil {
+		t.Errorf("price impact metric descriptor: %v", err)
 	}
 }
