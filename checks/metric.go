@@ -29,14 +29,31 @@ type Metric interface {
 }
 
 // RunMetric executes one metric, converting a panic into an undetermined result.
+//
+// The defer is installed before calling Describe so that a nil or broken
+// implementation that panics in Describe is caught. After the metric runs,
+// every evidence item is validated: Source and Observed must be non-blank,
+// and ObservedAt must be non-zero. Invalid evidence replaces the result
+// with an undetermined one.
 func RunMetric(ctx context.Context, m Metric, s Subject) (res MetricResult) {
-	d := m.Describe()
+	var d Descriptor
 
 	defer func() {
 		if r := recover(); r != nil {
-			res = metricUndetermined(d, s, fmt.Sprintf("metric panicked: %v", r))
+			// If d is zero-valued (Describe panicked), we still need an ID.
+			id := d.ID
+			if id == "" {
+				id = "unknown"
+			}
+			d2 := d
+			if d2.ID == "" {
+				d2 = Descriptor{ID: id, Title: "unknown metric"}
+			}
+			res = metricUndetermined(d2, s, fmt.Sprintf("metric panicked: %v", r))
 		}
 	}()
+
+	d = m.Describe()
 
 	if err := d.Validate(); err != nil {
 		return metricUndetermined(d, s, err.Error())
@@ -59,6 +76,22 @@ func RunMetric(ctx context.Context, m Metric, s Subject) (res MetricResult) {
 	if !res.Determined && strings.TrimSpace(res.Reason) == "" {
 		res.Reason = "no reason given — this is a bug in metric " + d.ID
 	}
+
+	// Validate evidence: every item in a determined result must have non-blank
+	// Source and Observed, and a non-zero ObservedAt.
+	if res.Determined {
+		for i, ev := range res.Evidence {
+			switch {
+			case strings.TrimSpace(ev.Source) == "":
+				return metricUndetermined(d, s, fmt.Sprintf("evidence[%d]: Source is blank", i))
+			case strings.TrimSpace(ev.Observed) == "":
+				return metricUndetermined(d, s, fmt.Sprintf("evidence[%d]: Observed is blank", i))
+			case ev.ObservedAt.IsZero():
+				return metricUndetermined(d, s, fmt.Sprintf("evidence[%d]: ObservedAt is zero", i))
+			}
+		}
+	}
+
 	return res
 }
 
