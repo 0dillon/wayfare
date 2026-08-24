@@ -866,6 +866,96 @@ func TestSpreadMetricDescriptorIsValid(t *testing.T) {
 	}
 }
 
+// depth metric ------------------------------------------------------------------
+
+func TestDepthObservedMetric(t *testing.T) {
+	m := loadOrderBookSnapshot(t, "xlm-ngnc-orderbook")
+	c := &dex.Client{HorizonURL: "https://horizon.stellar.org", HTTPClient: m.HTTPClient()}
+
+	depth := DepthMetric{DEX: c}
+	r := depth.RunObserved(ctx(), Subject{
+		Send:    asset.Native(),
+		Receive: asset.NGNC(),
+	})
+
+	if !r.Determined {
+		t.Fatalf("depth observed metric undetermined: %s", r.Reason)
+	}
+	if r.Unit != UnitCount {
+		t.Errorf("unit = %s, want count", r.Unit)
+	}
+	if !r.Value.IsPositive() {
+		t.Errorf("level count = %s, want positive on a real book", r.Value)
+	}
+}
+
+func TestDepthExecutableMetric(t *testing.T) {
+	m := loadOrderBookSnapshot(t, "usdc-ngnc-strictsend")
+	c := &dex.Client{HorizonURL: "https://horizon.stellar.org", HTTPClient: m.HTTPClient()}
+
+	depth := DepthMetric{
+		DEX:   c,
+		Sizes: []decimal.Decimal{decimal.NewFromInt(1), decimal.NewFromInt(100)},
+	}
+	r := depth.RunExecutable(ctx(), Subject{
+		Send:    asset.USDC(),
+		Receive: asset.NGNC(),
+	})
+
+	if !r.Determined {
+		t.Fatalf("depth executable metric undetermined: %s", r.Reason)
+	}
+	if r.Unit != UnitAmount {
+		t.Errorf("unit = %s, want amount", r.Unit)
+	}
+	if !r.Value.IsPositive() {
+		t.Errorf("executable amount = %s, want positive", r.Value)
+	}
+}
+
+func TestDepthNoPathsProducesUndetermined(t *testing.T) {
+	m := loadOrderBookSnapshot(t, "usdc-ngnc-strictsend-empty")
+	c := &dex.Client{HorizonURL: "https://horizon.stellar.org", HTTPClient: m.HTTPClient()}
+
+	depth := DepthMetric{
+		DEX:   c,
+		Sizes: []decimal.Decimal{decimal.NewFromInt(1)},
+	}
+	r := depth.RunExecutable(ctx(), Subject{
+		Send:    asset.USDC(),
+		Receive: asset.NGNC(),
+	})
+
+	if r.Determined {
+		t.Error("no paths must produce an undetermined result")
+	}
+	want := "no path found at any of the 1 sizes probed"
+	if r.Reason != want {
+		t.Errorf("Reason = %q, want %q", r.Reason, want)
+	}
+	if len(r.Evidence) == 0 {
+		t.Error("expected at least one evidence entry explaining the failure")
+	} else {
+		e := r.Evidence[0]
+		if !strings.Contains(e.Observed, "probed 1 sizes, no path found") {
+			t.Errorf("Evidence[0].Observed = %q, want it to contain 'probed 1 sizes, no path found'", e.Observed)
+		}
+		if e.Source == "" {
+			t.Error("Evidence[0].Source is blank — a metric must name its data source")
+		}
+		if e.ObservedAt.IsZero() {
+			t.Error("Evidence[0].ObservedAt is zero — a metric must timestamp its observation")
+		}
+	}
+}
+
+func TestDepthMetricDescriptorIsValid(t *testing.T) {
+	d := DepthMetric{}.Describe()
+	if err := d.Validate(); err != nil {
+		t.Errorf("depth metric descriptor: %v", err)
+	}
+}
+
 // RunMetric validation tests ---------------------------------------------------
 
 // panicMetric is a metric whose Describe method panics.

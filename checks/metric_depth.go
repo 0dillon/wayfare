@@ -14,6 +14,7 @@ package checks
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -131,10 +132,18 @@ func (m DepthMetric) RunExecutable(ctx context.Context, s Subject) MetricResult 
 	var maxReceive decimal.Decimal
 	var maxReceiveSize decimal.Decimal
 	pricedCount := 0
+	var probeErrors []string
 
 	for _, size := range sizes {
 		path, err := m.DEX.BestPath(ctx, s.Send, size, s.Receive)
-		if err != nil || path == nil {
+		if err != nil {
+			if strings.Contains(err.Error(), "no path found") {
+				continue // no liquidity at this size, not a probe failure
+			}
+			probeErrors = append(probeErrors, fmt.Sprintf("size=%s: %v", size, err))
+			continue
+		}
+		if path == nil {
 			continue
 		}
 		pricedCount++
@@ -142,6 +151,13 @@ func (m DepthMetric) RunExecutable(ctx context.Context, s Subject) MetricResult 
 			maxReceive = path.DestAmount
 			maxReceiveSize = size
 		}
+	}
+
+	if len(probeErrors) > 0 {
+		evidence.Observed = fmt.Sprintf("probed %d sizes, %d errors: %s",
+			len(sizes), len(probeErrors), strings.Join(probeErrors, "; "))
+		return MetricUndetermined(d, s,
+			fmt.Sprintf("%d of %d probe requests failed", len(probeErrors), len(sizes)), evidence)
 	}
 
 	if pricedCount == 0 {
@@ -155,10 +171,10 @@ func (m DepthMetric) RunExecutable(ctx context.Context, s Subject) MetricResult 
 		maxReceive, maxReceiveSize, pricedCount, len(sizes))
 
 	summary := fmt.Sprintf(
-		"executable ceiling: %s %s at %s %s send",
+		"max destination %s %s at %s %s send",
 		maxReceive, s.Receive.Code, maxReceiveSize, s.Send.Code)
 
-	return MetricValue(d, s, maxReceive, UnitCount, summary, evidence)
+	return MetricValue(d, s, maxReceive, UnitAmount, summary, evidence)
 }
 
 // Run implements the Metric interface by returning the observed depth metric.

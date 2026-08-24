@@ -1,0 +1,52 @@
+{
+  "format": "wayfare.snapshot",
+  "version": 1,
+  "recorded_at": "2026-08-23T00:00:00Z",
+  "corridor": {
+    "send": {
+      "code": "USDC",
+      "issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+    },
+    "receive": {
+      "code": "NGNC",
+      "issuer": "GASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6"
+    },
+    "reference_pair": ""
+  },
+  "sizes": ["1", "100"],
+  "sources": {
+    "horizon": {
+      "base_url": "https://horizon.stellar.org"
+    },
+    "reference": {
+      "base_url": ""
+    }
+  },
+  "notes": [
+    "Strict-send path responses for depth executable metric tests."
+  ],
+  "interactions": [
+    {
+      "kind": "horizon",
+      "method": "GET",
+      "key": "GET /paths/strict-send?destination_assets=NGNC%3AGASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6&source_amount=1&source_asset_code=USDC&source_asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN&source_asset_type=credit_alphanum4",
+      "url": "https://horizon.stellar.org/paths/strict-send?destination_assets=NGNC%3AGASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6&source_amount=1&source_asset_code=USDC&source_asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN&source_asset_type=credit_alphanum4",
+      "status": 200,
+      "content_type": "application/hal+json",
+      "recorded_at": "2026-08-23T00:00:00Z",
+      "body_file": "responses/001-paths-size-1.json",
+      "body_sha256": "sha256:87201971fe2df3dbf24c5b48d172d75298dd42b3ccf0bd3da1b385a1aec0e430"
+    },
+    {
+      "kind": "horizon",
+      "method": "GET",
+      "key": "GET /paths/strict-send?destination_assets=NGNC%3AGASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6&source_amount=100&source_asset_code=USDC&source_asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN&source_asset_type=credit_alphanum4",
+      "url": "https://horizon.stellar.org/paths/strict-send?destination_assets=NGNC%3AGASBV6W7GGED66MXEVC7YZHTWWYMSVYEY35USF2HJZBLABLYIFQGXZY6&source_amount=100&source_asset_code=USDC&source_asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN&source_asset_type=credit_alphanum4",
+      "status": 200,
+      "content_type": "application/hal+json",
+      "recorded_at": "2026-08-23T00:00:00Z",
+      "body_file": "responses/002-paths-size-100.json",
+      "body_sha256": "sha256:87201971fe2df3dbf24c5b48d172d75298dd42b3ccf0bd3da1b385a1aec0e430"
+    }
+  ]
+}

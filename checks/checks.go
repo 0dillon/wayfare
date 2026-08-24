@@ -124,6 +124,7 @@ const (
 	UnitPercent Unit = "percent"
 	UnitRatio   Unit = "ratio"
 	UnitCount   Unit = "count"
+	UnitAmount  Unit = "amount"
 	UnitSeconds Unit = "seconds"
 )
 
