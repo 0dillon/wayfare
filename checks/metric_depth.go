@@ -28,13 +28,9 @@ type DepthMetric struct {
 	Sizes []decimal.Decimal
 }
 
-var defaultDepthSizes = []decimal.Decimal{
-	decimal.NewFromInt(1),
-	decimal.NewFromInt(10),
-	decimal.NewFromInt(100),
-	decimal.NewFromInt(1000),
-	decimal.NewFromInt(5000),
-}
+// defaultDepthSizes uses the same probe sizes as the route ladder so
+// both measure the same corridor at the same sizes.
+var defaultDepthSizes = dex.DefaultSizes
 
 // Describe implements Metric.
 func (DepthMetric) Describe() Descriptor {
