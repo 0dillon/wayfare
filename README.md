@@ -336,6 +336,8 @@ old its benchmark was when the reading was taken.
 
 Full spec: **[docs/run-store.md](docs/run-store.md)**
 
+What verification looks like — including broken-chain output: **[docs/verify-store.md](docs/verify-store.md)**
+
 ---
 
 ## Packages
