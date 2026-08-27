@@ -2,7 +2,9 @@
 
 A tamper-evident history of corridor measurements.
 
-**Schema version 1.** Implemented by `runstore/`.
+**Schema version 3.** Implemented by `runstore/`. Version 1 and Version 2
+chains still load and still verify — see [Migration to version 2](#migration-to-version-2)
+and [Migration to version 3](#migration-to-version-3).
 
 ---
 
@@ -35,7 +37,7 @@ This is not a blockchain and makes no distributed-consensus claim.
 
 ```json
 {
-  "version": 1,
+  "version": 3,
   "seq": 42,
   "recorded_at": "2026-08-21T22:30:40Z",
   "corridor": "USDC-NGNC",
@@ -45,6 +47,7 @@ This is not a blockchain and makes no distributed-consensus claim.
     "mid": "1350.2568",
     "source": "currency-api",
     "as_of": "2026-08-21T00:00:00Z",
+    "fetched_at": "2026-08-21T22:28:00Z",
     "secondary_mid": "1348.0585",
     "secondary_source": "exchangerate-api",
     "divergence_pct": "0.16",
@@ -58,6 +61,24 @@ This is not a blockchain and makes no distributed-consensus claim.
      "receive_amount": "102.78", "effective_rate": "1027.84",
      "loss_pct": "24.65", "verdict": "UNUSABLE", "path": "USDC -> NGNC"}
   ],
+  "checks": [
+    {"id": "sep10.endpoint-responds", "scope": "anchor",
+     "subject": "ngnc.online", "severity": "warning",
+     "determined": false, "passed": false,
+     "reason": "no sep10 web-auth endpoint declared",
+     "summary": "could not determine: no sep10 web-auth endpoint declared",
+     "evidence": [{"source": "ngnc.online/.well-known/stellar.toml",
+                    "observed": "NO WEB_AUTH_ENDPOINT"}],
+     "observed_at": "2026-08-21T22:28:00Z"}
+  ],
+  "metrics": [
+    {"id": "spread.bid-ask", "scope": "asset", "subject": "USDC",
+     "determined": true, "value": "0.0004", "unit": "ratio",
+     "summary": "bid-ask spread on the USDC/NGNC book",
+     "evidence": [{"source": "https://horizon.stellar.org/order_book",
+                    "observed": "bid=1350.1000 ask=1350.6400"}],
+     "observed_at": "2026-08-21T22:28:00Z"}
+  ],
   "prev_hash": "sha256:0000…0000",
   "hash": "sha256:6b1f…"
 }
@@ -67,7 +88,7 @@ Records are derived from `route.CorridorJSON` — the same shape the HTTP API
 and `ladder -json` emit — so the stored record and the served record cannot
 drift into two schemas that disagree about the same measurement.
 
-Three fields are worth calling out:
+Four pieces are worth calling out:
 
 **`recommended` is `null`, not omitted,** when no size produced an acceptable
 route. That is the normal shape of a broken corridor, and storing it as an
@@ -78,7 +99,17 @@ recommendation it refused to make.
 corridor's numbers moving because the benchmark changed is a completely
 different event from the corridor moving, and a history recording only the mid
 it scored against cannot distinguish them afterwards. `scored_against` names
-which mid produced the verdicts in that record.
+which mid produced the verdicts in that record. Since Version 3 it also
+carries `fetched_at` — when this project last obtained the rate, which can be
+older than `recorded_at` when a cached rate was reused — so a reader can tell
+how old the benchmark was when the reading was taken.
+
+**`checks` and `metrics` carry the findings taken with the measurement.** A
+check result preserves its tri-state — `determined: false` is *not* a failure —
+plus its `reason`, `summary`, evidence and timestamp, exactly as a live
+response serves them. A metric carries its `value` and `unit` as decimal
+strings. In Version 2 a record may also omit either block entirely, meaning no
+checks or no metrics ran.
 
 **All money is a decimal string.** Never a JSON number, never a `float64`.
 
@@ -121,6 +152,85 @@ This is enforced, not merely agreed. `TestRecordHashIsPinned` freezes the hash
 of a fixed record; a purely cosmetic field reorder fails it. The test's own
 comment says what to do when it goes red, because the tempting response —
 updating the constant — is exactly the mistake it exists to prevent.
+
+### Migration to version 3
+
+Version 2 records had no `fetched_at` on the reference block. Version 3 adds
+it, so a stored reading can tell a reader how old the benchmark was when the
+reading was taken — the live wire already publishes `reference_fetched_at`,
+and a replay that dropped it made stored history look current no matter how
+reused the rate behind it was.
+
+This is still a Version bump — the field set and the field order are part of
+every hash — **but the migration is byte-for-byte invisible to existing
+chains**, exactly like the Version 2 migration:
+
+- The new field is declared `omitempty` and placed **after every Version 2
+  field** of `runstore.Reference`.
+- `encoding/json` emits struct fields in declaration order, so a record with
+  an empty `fetched_at` encodes to exactly the same JSON — same field order,
+  same contents — it did as a Version 2 record.
+- Therefore a Version 2 record's hash is *unchanged* under Version 3, and a
+  stored Version 2 chain still loads and still verifies with no rewriting.
+
+Concretely:
+
+- A record written as Version 1 or Version 2 stays that version on disk
+  forever. Nothing is relabelled or rewritten — the store is append-only.
+- New records are written `version: 3`, carrying `fetched_at` when the
+  measurement knew when its rate was fetched and omitting it when it did not
+  (an older build's record, or a provider that left the stamp unset — the
+  honest "unknown", never a fabricated time).
+- A corridor's file can therefore become a **mixed-version chain** (older
+  Version 1 or Version 2 records, newer Version 3 records). `Open` and
+  `Verify` walk all three; each record verifies against its own `version`
+  field, and the chain links across every boundary because each record
+  carries the full hash of the one before it regardless of who wrote it.
+
+Verification, not rewriting, is what makes a mixed chain safe: the new build
+*understands* Version 1 and Version 2 records rather than silently upgrading
+them, so it can tell a genuine legacy record from a tampered one — and it
+refuses any other version (see [the version-mismatch rule](#the-version-mismatch-rule)).
+
+### Migration to version 2
+
+Version 1 records had no `checks` or `metrics` block. Version 2 adds both.
+
+This is still a Version bump — the field set and the field order are part of
+every hash — **but the migration is byte-for-byte invisible to existing
+chains**, and intentionally so:
+
+- The two new fields are declared `omitempty` and placed **after every Version
+  1 field**.
+- `encoding/json` emits struct fields in declaration order, so a record with
+  no findings encodes to exactly the same JSON — same field order, same
+  contents — it did as a Version 1 record.
+- Therefore a Version 1 record's hash is *unchanged* under Version 2, and a
+  stored Version 1 chain still loads and still verifies with no rewriting.
+
+Concretely:
+
+- A record written as Version 1 stays `version: 1` on disk forever. Nothing
+  is relabelled or rewritten — the store is append-only.
+- New records are written `version: 2`, with a `checks`/`metrics` block when
+  checks ran and both blocks omitted when none did.
+- A corridor's file can therefore become a **mixed-version chain** (older
+  Version 1 records, newer Version 2 records). `Open` and `Verify` walk both;
+  each record verifies against its own `version` field, and the chain links
+  across the boundary because every record carries the full hash of the one
+  before it regardless of who wrote it.
+
+Verification, not rewriting, is what makes a mixed chain safe: the new build
+*understands* Version 1 records rather than silently upgrading them, so it can
+tell a genuine legacy record from a tampered one — and it refuses any other
+version (see [the version-mismatch rule](#the-version-mismatch-rule)).
+
+### The version-mismatch rule
+
+A record version this build does not recognise is an error, never a best-effort
+parse: `runstore` accepts exactly `1`, `2` and `3`. Relabelling a record to
+make it parse is falsification, not migration — a record that says `version: 9`
+is a schema the build cannot speak, and guessing at it would hide the mismatch.
 
 ---
 
