@@ -34,6 +34,13 @@ import (
 //     issuer — but not that it is Circle's. Confirm before any mainnet
 //     execution path ships. See VerifyAgainstTOML in package anchor.
 //
+//   - NGNT   VERIFIED, 2026-08-25, read from
+//     https://cowrie.exchange/.well-known/stellar.toml. Issued by Cowrie
+//     Integrated Systems, status="live", pegged 1:1 to NGN,
+//     anchor_asset_type="fiat". NETWORK_PASSPHRASE = public mainnet.
+//     No ANCHOR_QUOTE_SERVER in the document, so the anchor publishes no
+//     machine-readable SEP-38 rate.
+//
 // The pending status on GHSC and KESC is a first-class finding, not a detail
 // to route around. Per SEP-1 only "live" means in service, and the monitor
 // reports an asset its own issuer has not launched as exactly that rather
@@ -48,6 +55,11 @@ const (
 
 	// NGNCIssuer is retained as the original name for LinkIOIssuer.
 	NGNCIssuer = LinkIOIssuer
+
+	// CowrieIssuer issues NGNT, a naira-pegged token from Cowrie Integrated
+	// Systems. It is a separate issuer from LinkIO — a second anchor for
+	// the same fiat currency, which makes comparison possible.
+	CowrieIssuer = "GAWODAROMJ33V5YDFY3NPYTHVYQG7MJXVJ2ND3AOGIHYRWINES6ACCPD"
 )
 
 // Entry represents a verified asset or corridor registration record.
@@ -138,6 +150,15 @@ var registry = []Entry{
 		SourceURL:        "https://ngnc.online/.well-known/stellar.toml",
 		HomeDomain:       "ngnc.online",
 	},
+	{
+		Code:             "NGNT",
+		Issuer:           CowrieIssuer,
+		Peg:              "NGN",
+		Status:           "live",
+		VerificationDate: "2026-08-25",
+		SourceURL:        "https://cowrie.exchange/.well-known/stellar.toml",
+		HomeDomain:       "cowrie.exchange",
+	},
 }
 
 var (
@@ -178,6 +199,12 @@ func GHSC() Asset { return Stellar("GHSC", LinkIOIssuer) }
 // KESC is the Kenyan shilling token from the same issuer as NGNC. Its issuer
 // declares it status="pending" — not in service.
 func KESC() Asset { return Stellar("KESC", LinkIOIssuer) }
+
+// NGNT is the naira token issued by Cowrie Integrated Systems. Its issuer
+// declares it status="live". A second naira-pegged asset from a different
+// issuer — the comparison that distinguishes an issuer-specific result from a
+// corridor-wide one.
+func NGNT() Asset { return Stellar("NGNT", CowrieIssuer) }
 
 // Lookup resolves a verified token by its code.
 //

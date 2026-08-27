@@ -36,7 +36,7 @@ func TestLookup(t *testing.T) {
 // would make that output nondeterministic.
 func TestKnownCodes(t *testing.T) {
 	got := KnownCodes()
-	want := []string{"GHSC", "KESC", "NGNC", "USDC"}
+	want := []string{"GHSC", "KESC", "NGNC", "NGNT", "USDC"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("KnownCodes() = %v, want %v", got, want)
 	}
@@ -73,7 +73,7 @@ func TestFiatPeg(t *testing.T) {
 // TestIsFiatToken exercises the same cases through the boolean-only helper,
 // since callers on the hot classification path use this form directly.
 func TestIsFiatToken(t *testing.T) {
-	for _, a := range []Asset{NGNC(), GHSC(), KESC()} {
+	for _, a := range []Asset{NGNC(), GHSC(), KESC(), NGNT()} {
 		if !IsFiatToken(a) {
 			t.Errorf("IsFiatToken(%s) = false, want true", a)
 		}
