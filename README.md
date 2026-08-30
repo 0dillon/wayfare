@@ -346,7 +346,7 @@ What verification looks like — including broken-chain output: **[docs/verify-s
 |:---|:---|
 | `asset` | Corridor endpoints, verified issuers, the fiat-peg registry |
 | `refrate` | Reference mid-market rates: two providers, cached, cross-checked |
-| `anchor` | SEP-1 discovery — can this anchor be priced at all? |
+| `anchor` | SEP-1 discovery — can this anchor be priced at all, and which SEPs does it advertise? |
 | `sep38` | Anchor RFQ client, with the fee-denomination identity |
 | `dex` | On-chain pricing via Horizon pathfinding, plus market health |
 | `route` | Ladder sweep, verdicts, integrity, and the shared wire shape |
@@ -357,6 +357,13 @@ What verification looks like — including broken-chain output: **[docs/verify-s
 | `server` | HTTP surface and the embedded single-file UI |
 | `cmd/ladder` | Measurement CLI |
 | `cmd/wayfared` | Server and scheduler |
+
+`anchor.Profile.SEPs()` returns the numbers of the SEPs an anchor advertises
+in its `stellar.toml` — SEP-1 (the document itself), 6, 10, 12, 24, 31, 38 —
+derived from the same fields `Priceable`, `SEP24`, `SEP31`, `SEP6`, `SEP10`
+and `SEP12` already read, so the capability picture is legible in one call
+rather than six separate booleans read by hand. `SEPCapabilities()` renders
+the same list with a short name per SEP, and `Explain()` includes it.
 
 ---
 
