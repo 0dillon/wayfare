@@ -119,9 +119,9 @@ All fetches were made 2026-08-30.
   `DOCUMENTATION`, `PRINCIPALS`, `VALIDATORS`, `CURRENCIES`. In SEP terms:
   SEP-12 (KYC), SEP-6 (programmatic transfer), SEP-10 (web auth) and SEP-31
   (cross-border payment) are all declared.
-- **`ANCHOR_QUOTE_SERVER`: absent.** `TRANSFER_SERVER_SEP0024` also absent.
-- **Verdict: no SEP-38**, despite declaring SEP-12, SEP-6, SEP-10 and SEP-31 —
-  every other SEP this survey checked for except the one it was asked about.
+- **`ANCHOR_QUOTE_SERVER`: absent.** `TRANSFER_SERVER_SEP0024` (SEP-24) is
+  also absent.
+- **Verdict: no SEP-38**, despite declaring SEP-12, SEP-6, SEP-10 and SEP-31.
   (ClickPesa's fields are unknown, since its `stellar.toml` could not be
   reached; this is a statement about cowrie.exchange's own declarations, not
   a ranking across all four anchors.)
