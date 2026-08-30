@@ -25,6 +25,12 @@ import (
 // rather than silently dropped: a corrupt figure and an absent one are not
 // the same failure, and treating the former as the latter would hide data
 // corruption behind an ordinary "not enough history yet" result.
+//
+// A parsed value that is negative is the same class of defect. DivergencePct
+// is produced by refrate.reconcile as hi.Sub(lo) of the two candidate mids —
+// a magnitude, never signed — so a negative figure cannot be a legitimate
+// observation. Accepting it would let a single corrupt record quietly pull
+// the reported mean down, which is a worse failure than refusing to answer.
 func DivergencePctSeries(recs []*runstore.Record) ([]decimal.Decimal, error) {
 	out := make([]decimal.Decimal, 0, len(recs))
 	for _, r := range recs {
@@ -37,6 +43,12 @@ func DivergencePctSeries(recs []*runstore.Record) ([]decimal.Decimal, error) {
 			return nil, fmt.Errorf(
 				"analysis: corridor %s, run seq %d: parsing divergence_pct %q: %w",
 				r.Corridor, r.Seq, raw, err)
+		}
+		if v.IsNegative() {
+			return nil, fmt.Errorf(
+				"analysis: corridor %s, run seq %d: divergence_pct %q is negative; "+
+					"divergence is a magnitude and cannot be signed",
+				r.Corridor, r.Seq, raw)
 		}
 		out = append(out, v)
 	}

@@ -91,6 +91,37 @@ func TestDivergencePctSeriesRejectsMalformedValue(t *testing.T) {
 	}
 }
 
+// TestDivergencePctSeriesRejectsNegativeValue covers the same defect class as
+// TestDivergencePctSeriesRejectsMalformedValue: DivergencePct is a magnitude
+// (see refrate.reconcile, which computes it as hi.Sub(lo) of the larger mid
+// minus the smaller), so a negative figure cannot be a legitimate
+// observation and must not be allowed to quietly pull a reported mean down.
+func TestDivergencePctSeriesRejectsNegativeValue(t *testing.T) {
+	recs := []*runstore.Record{
+		divRecord(1, "1.50"),
+		divRecord(9, "-0.50"),
+	}
+	_, err := DivergencePctSeries(recs)
+	if err == nil {
+		t.Fatal("expected an error for a negative divergence_pct")
+	}
+	for _, want := range []string{"USDC-NGNC", "9", "-0.50"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q, which a reader needs to find the bad record", err, want)
+		}
+	}
+}
+
+// TestDivergenceHistoryRejectsNegativeValue pins that DivergenceHistory
+// propagates the same rejection rather than letting a negative figure reach
+// AnalyzeDecimal and skew the mean.
+func TestDivergenceHistoryRejectsNegativeValue(t *testing.T) {
+	recs := []*runstore.Record{divRecord(1, "-1.00")}
+	if _, err := DivergenceHistory(recs); err == nil {
+		t.Fatal("expected DivergenceHistory to reject a negative divergence_pct")
+	}
+}
+
 // TestDivergenceHistoryUndeterminedBelowMinimumSample covers the documented
 // minimum-sample-size discipline this package already enforces for every
 // other series: a handful of runs must not produce a mean and stddev that

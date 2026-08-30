@@ -353,6 +353,23 @@ func TestTrendDivergenceStatsMalformedValueIsAnError(t *testing.T) {
 	}
 }
 
+// TestTrendDivergenceStatsNegativeValueIsAnError covers the same defect class
+// as the malformed-value test above: DivergencePct is a magnitude and cannot
+// legitimately be negative, so a stored negative figure must fail the
+// request rather than be allowed to quietly pull the reported mean down.
+func TestTrendDivergenceStatsNegativeValueIsAnError(t *testing.T) {
+	seeds := buildTrendSeeds(1, "-2.50", func(i int) bool { return true })
+	srv := trendServer(t, seedTrendStore(t, seeds))
+
+	status, body := getJSON(t, srv.URL+"/api/corridor/trend?to=NGNC")
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for a negative stored divergence_pct: %v", status, body)
+	}
+	if body["error"] == nil {
+		t.Error("expected an error message")
+	}
+}
+
 // TestTrendMoneyCrossesTheWireAsStrings guards the float64 invariant at the
 // trend boundary, the same way the measurement endpoint is guarded.
 func TestTrendMoneyCrossesTheWireAsStrings(t *testing.T) {
