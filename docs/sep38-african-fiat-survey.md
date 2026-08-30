@@ -1,12 +1,15 @@
 # Research: do any Stellar anchors publish SEP-38 for African fiat?
 
 **Status: completed.** Surveyed four anchors issuing African-fiat-pegged
-Stellar tokens. One declares `ANCHOR_QUOTE_SERVER`; its own quote server does
-not price the African-fiat asset it issues. **Verdict: no anchor surveyed
-offers a live, quotable SEP-38 rate for an African fiat currency.** GitHub
-issue [#180](https://github.com/Wayfare-labs/wayfare/issues/180) — "a live
-SEP-38 round-trip has never been performed", tracked as backlog entry `#106`
-— remains unreachable through every anchor checked here.
+Stellar tokens: three were reachable, one was not. Of the three reachable
+anchors, one declares `ANCHOR_QUOTE_SERVER`, but its own quote server does not
+list the African-fiat asset it issues among the assets it advertises.
+**Verdict: no positive result among the three reachable anchors; the fourth
+(ClickPesa) remains inconclusive, not negative — its `stellar.toml` could not
+be reached at all.** GitHub issue
+[#180](https://github.com/Wayfare-labs/wayfare/issues/180) — "a live SEP-38
+round-trip has never been performed", tracked as backlog entry `#106` — is not
+shown reachable by anything this survey found.
 
 > **A numbering note, checked directly against the tracker rather than
 > assumed:** the issue that commissioned this survey (GitHub
@@ -51,12 +54,15 @@ GHS (Ghanaian cedi), KES (Kenyan shilling), and ZAR (South African rand) — see
 
 The anchors checked are:
 
-1. Every anchor currently in `asset/known.go`'s verified registry that issues
-   a token pegged to one of those four currencies. This is a principled,
-   reproducible boundary rather than an arbitrary one: these are exactly the
-   anchors this project could plausibly build a corridor against today, since
-   `asset.HomeDomain` only resolves a domain for an asset already in that
-   registry.
+1. Every anchor currently in `asset/known.go`'s verified registry
+   (`asset.Registry()` / `asset.LookupEntry`, keyed by code and issuer
+   together) that issues a token pegged to one of those four currencies. This
+   is a principled, reproducible boundary rather than an arbitrary one: these
+   are exactly the anchors this project could plausibly build a corridor
+   against today. (`asset.HomeDomain` is a separate, narrower lookup — issuer
+   account to publishing domain, keyed by issuer alone — used later in this
+   survey to find each anchor's `stellar.toml`; it is not itself what defines
+   registry membership.)
 2. One anchor named by public sources (the Stellar Community Fund and an
    anchor's own blog post) as issuing a KES-pegged token, to check whether a
    fourth candidate exists outside the current registry. This is **not** a
@@ -70,6 +76,16 @@ For each, the anchor's own `stellar.toml` was fetched live and checked for
 declared quote server is a claim, not a working rate — the same distinction
 `checks/sep10_endpoint.go` already draws for SEP-10, and issue
 [#183](https://github.com/Wayfare-labs/wayfare/issues/183) generalizes.
+
+**A stated limit of this method:** `/info` only reports which assets an
+anchor's quote server *advertises*; it is not itself a price or a quote.
+Confirming a rate can actually be obtained would mean going further — a
+`GET /price` or `POST /quote` call, per SEP-38 — which this survey did not do.
+Every finding below that reads "declares SEP-38" or "lists as quotable" refers
+to what `/info` reports, not to a fetched rate; where a currency does not even
+appear in `/info`, no further probe could have produced one regardless, so the
+gap does not change this survey's answer for the currencies it is actually
+about.
 
 All fetches were made 2026-08-30.
 
@@ -104,8 +120,11 @@ All fetches were made 2026-08-30.
   SEP-12 (KYC), SEP-6 (programmatic transfer), SEP-10 (web auth) and SEP-31
   (cross-border payment) are all declared.
 - **`ANCHOR_QUOTE_SERVER`: absent.** `TRANSFER_SERVER_SEP0024` also absent.
-- **Verdict: no SEP-38**, despite this being the most fully-featured of the
-  four anchors surveyed on every other SEP.
+- **Verdict: no SEP-38**, despite declaring SEP-12, SEP-6, SEP-10 and SEP-31 —
+  every other SEP this survey checked for except the one it was asked about.
+  (ClickPesa's fields are unknown, since its `stellar.toml` could not be
+  reached; this is a statement about cowrie.exchange's own declarations, not
+  a ranking across all four anchors.)
 
 ### 3. zeam.money — ZARZ (ZAR); also issues USDZ (USD, out of scope here)
 
@@ -120,42 +139,42 @@ All fetches were made 2026-08-30.
 - **`ANCHOR_QUOTE_SERVER` is present** — the only anchor in this survey that
   declares one.
 - **But:** its `/info` response
-  (`https://anchor.zeam.money/sep38/info`, fetched 2026-08-30, quoted here
-  verbatim) is:
+  (`https://anchor.zeam.money/sep38/info`, fetched 2026-08-30) is reproduced
+  below in full — this is the complete `assets` array, not an excerpt:
 
   ```json
-  {"assets":[
-    {"asset":"stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"},
-    {"asset":"stellar:BRL:GDVKY2GU2DRXWTBEYJJWSFXIGBZV6AZNBVVSUHEPZI54LIS6BA7DVVSP"},
-    {"asset":"iso4217:BRL","sell_delivery_methods":[...],"buy_delivery_methods":[...],"country_codes":["BR"]}
-  ]}
+  {"assets":[{"asset":"stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"},{"asset":"stellar:BRL:GDVKY2GU2DRXWTBEYJJWSFXIGBZV6AZNBVVSUHEPZI54LIS6BA7DVVSP"},{"asset":"iso4217:BRL","sell_delivery_methods":[{"name":"cash","description":"Deposit cash BRL at one of our agent locations."},{"name":"ACH","description":"Send BRL directly to the Anchor's bank account."},{"name":"PIX","description":"Send BRL directly to the Anchor's bank account."}],"buy_delivery_methods":[{"name":"cash","description":"Pick up cash BRL at one of our payout locations."},{"name":"ACH","description":"Have BRL sent directly to your bank account."},{"name":"PIX","description":"Have BRL sent directly to the account of your choice."}],"country_codes":["BR"]}]}
   ```
 
-  Three quotable assets: USDC, a Stellar BRL token, and `iso4217:BRL` with
+  Three assets advertised: USDC, a Stellar BRL token, and `iso4217:BRL` with
   cash/ACH/PIX delivery methods for Brazil. **Neither `ZARZ` nor
   `iso4217:ZAR` — zeam's own currency and the African fiat it claims to
   track — appears anywhere in this list.** The `asset.USDCIssuer` value in
   this repository's own registry matches the USDC issuer quoted here exactly,
   which is at least some evidence the endpoint is genuine SEP-38 machinery
-  and not a placeholder — it is just not configured, or not currently able,
-  to quote the anchor's own African-fiat token.
-- This repository does not know why. Possible explanations — an
-  unconfigured or leftover demo deployment, or infrastructure shared with an
-  unrelated Brazilian anchor — are speculation this document declines to
-  make; only the observed `/info` response is reported.
-- **Verdict: SEP-38 is declared, but does not cover African fiat.** This is
-  the most important finding of this survey: a check that only asks "is
-  `ANCHOR_QUOTE_SERVER` present?" — which is exactly what
+  and not a placeholder — it is just not advertising the anchor's own
+  African-fiat token as one it can quote. (This survey checked `/info` only —
+  see the stated method limit above — so it cannot say whether the three
+  assets that *are* listed would actually yield a price via `/price` or
+  `/quote`; the point here is narrower: ZARZ is not even offered.)
+- This repository does not know why ZARZ is absent from `/info`. Possible
+  explanations — an unconfigured or leftover demo deployment, or
+  infrastructure shared with an unrelated Brazilian anchor — are speculation
+  this document declines to make; only the observed `/info` response is
+  reported.
+- **Verdict: SEP-38 is declared, but `/info` does not list the African-fiat
+  asset.** This is the most important finding of this survey: a check that
+  only asks "is `ANCHOR_QUOTE_SERVER` present?" — which is exactly what
   `anchor.Profile.Priceable` currently means in this codebase — would
-  misreport zeam.money as able to price ZARZ. It cannot, as of this
-  observation. `Priceable` is accurate to what it currently claims to measure
+  misreport zeam.money as able to price ZARZ. `/info`, fetched live, shows
+  otherwise. `Priceable` is accurate to what it currently claims to measure
   (a declared quote server exists) and this is not a defect in it; it is a
-  gap between "declares SEP-38" and "can quote this specific asset" that no
+  gap between "declares SEP-38" and "advertises this specific asset" that no
   code in this repository currently checks, because no anchor in the
   project's existing case study declares SEP-38 at all. Any future work
   wiring an anchor's `Priceable` flag into a corridor decision should account
   for this — the field cannot currently promise the asset in question is
-  actually quotable, only that a quote server for *something* is declared.
+  actually offered, only that a quote server for *something* is declared.
 
 ### 4. ClickPesa — KES, TZS, RWF (not in this repository's registry)
 
@@ -179,25 +198,32 @@ All fetches were made 2026-08-30.
 
 ## What this means for #180 (backlog `#106`)
 
-None of the three African-fiat anchors already in this project's registry
-(covering NGN, GHS, KES, ZAR) offers a working SEP-38 quote for the currency
-it issues, as observed on 2026-08-30. The one anchor that declares the
-capability (zeam.money, for ZAR) does not deliver it in practice. The fourth
-candidate (ClickPesa, for KES) could not be reached to check at all.
+Of the three anchors this survey actually reached, none offers a working
+SEP-38 quote for the African-fiat currency it issues, as observed on
+2026-08-30: two (ngnc.online, cowrie.exchange) declare no quote server at
+all, and the one that does (zeam.money, for ZAR) does not list ZARZ among the
+assets its quote server advertises. The fourth candidate (ClickPesa, for KES)
+could not be reached to check at all, and its status is **inconclusive, not
+negative** — it does not add to the negative count above.
 
-**#180 is not reachable through any anchor this survey found.** Performing a
-live SEP-38 round-trip on an African-fiat corridor would require either a
-currently-unsurveyed anchor this document did not find, or one of the four
-above changing its published configuration. Re-checking zeam.money
-periodically is the most promising lead of the four, since the
-`ANCHOR_QUOTE_SERVER` infrastructure is at least present and answering —
-unlike the other three, it is one configuration change away from a positive
-result, not a from-scratch integration.
+**Nothing this survey found demonstrates #180 is reachable.** That is not the
+same claim as "every African-fiat anchor lacks SEP-38" — this was a bounded
+survey of four anchors, one of which could not be checked. Performing a live
+SEP-38 round-trip on an African-fiat corridor would require either
+ClickPesa turning out, on a future check, to declare a working quote server;
+a currently-unsurveyed anchor this document did not look at; or one of the
+three reachable anchors changing its published configuration. Of those,
+zeam.money may be worth re-checking periodically, since its
+`ANCHOR_QUOTE_SERVER` infrastructure is at least present and answering — but
+this document does not know why ZARZ is missing from its `/info` response,
+so it cannot say how much work reaching a positive result there would
+actually take; that is a hypothesis for a future check to test, not a
+finding this survey established.
 
 This survey does not recommend building toward a ZAR corridor on the strength
-of zeam's declared-but-non-functional quote server; #179 (reporting SEP-38
-availability as a corridor fact, backlog `#105`) and #180 both need a
-*quotable* asset, and `ZARZ` is not currently one.
+of zeam's `/info` response; #179 (reporting SEP-38 availability as a corridor
+fact, backlog `#105`) and #180 both need an asset a quote server actually
+advertises, and `ZARZ` is not currently one.
 
 ---
 
