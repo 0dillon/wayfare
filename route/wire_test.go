@@ -83,12 +83,16 @@ func TestAssetJSONMarshalsTheWireFormField(t *testing.T) {
 	}
 }
 
-// TestAssetJSONZeroValueOmitsTheWireForm covers a producer that has only a
+// TestAssetJSONBareCodeOmitsTheWireForm covers a producer that has only a
 // bare code to work from — e.g. a stale-path fallback for an asset the
 // verified registry does not recognise — where Kind and Issuer are not known.
 // The wire form must be absent rather than a guess built from a bare code,
 // per the project's rule that an unavailable identity is never synthesised.
-func TestAssetJSONZeroValueOmitsTheWireForm(t *testing.T) {
+// This constructs AssetJSON directly, the shape such a fallback actually
+// builds (see server/api.go's route.AssetJSON{Code: code} call sites) —
+// there is no asset.Asset to convert in that case, which is exactly the
+// situation this test exists to cover.
+func TestAssetJSONBareCodeOmitsTheWireForm(t *testing.T) {
 	j := AssetJSON{Code: "UNKNOWN"}
 
 	buf, err := json.Marshal(j)
@@ -97,5 +101,44 @@ func TestAssetJSONZeroValueOmitsTheWireForm(t *testing.T) {
 	}
 	if strings.Contains(string(buf), `"asset"`) {
 		t.Errorf("marshaled output %s carries an \"asset\" key with no verified identity to back it", buf)
+	}
+}
+
+// TestToAssetJSONOmitsWireFormForIncompleteAsset covers the case
+// TestAssetJSONBareCodeOmitsTheWireForm does not: an asset.Asset that exists
+// but is not Identifiable, passed through ToAssetJSON itself. Before this
+// fix, asset.Asset.SEP38() was called unconditionally, so an issued Stellar
+// asset with no issuer produced "stellar:CODE:" — a string that looks like a
+// complete wire form but names no issuer at all — and a zero-value
+// asset.Asset produced "stellar::". Both are exactly the kind of guessed
+// identity the project's "never synthesised" rule refuses.
+func TestToAssetJSONOmitsWireFormForIncompleteAsset(t *testing.T) {
+	cases := []struct {
+		name string
+		a    asset.Asset
+	}{
+		{"issued Stellar asset with no issuer", asset.Stellar("USDC", "")},
+		{"zero-value asset", asset.Asset{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			j := ToAssetJSON(tc.a)
+
+			if j.Asset != "" {
+				t.Errorf("Asset = %q, want empty — %+v has no issuer to identify it", j.Asset, tc.a)
+			}
+			if j.Code != tc.a.Code {
+				t.Errorf("Code = %q, want %q — Code must still survive", j.Code, tc.a.Code)
+			}
+
+			buf, err := json.Marshal(j)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if strings.Contains(string(buf), `"asset"`) {
+				t.Errorf("marshaled output %s carries an \"asset\" key for an unidentifiable asset", buf)
+			}
+		})
 	}
 }

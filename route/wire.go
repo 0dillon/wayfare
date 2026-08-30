@@ -159,10 +159,11 @@ type StaleJSON struct {
 // client comparing an asset here against a SEP-38 quote request or response
 // can compare the strings directly rather than reassembling one from parts.
 //
-// Asset is empty on a wire producer that has only a bare code to work from —
-// see route.AssetJSON{Code: code} call sites — because there the asset's Kind
-// and Issuer are not known, and a wire form built from a guess would state an
-// identity nothing verified.
+// Asset is empty whenever the source asset.Asset is not Identifiable — an
+// issued Stellar asset with no issuer, in particular — and on a wire producer
+// that has only a bare code to work from at all (see route.AssetJSON{Code:
+// code} call sites), because in both cases a wire form built from a guess
+// would state an identity nothing verified.
 type AssetJSON struct {
 	Code   string `json:"code"`
 	Issuer string `json:"issuer,omitempty"`
@@ -171,7 +172,10 @@ type AssetJSON struct {
 }
 
 func ToAssetJSON(a asset.Asset) AssetJSON {
-	j := AssetJSON{Code: a.Code, Issuer: a.Issuer, Asset: a.SEP38()}
+	j := AssetJSON{Code: a.Code, Issuer: a.Issuer}
+	if a.Identifiable() {
+		j.Asset = a.SEP38()
+	}
 	if peg, ok := asset.FiatPeg(a); ok {
 		j.Peg = peg
 	}
