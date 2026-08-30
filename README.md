@@ -303,7 +303,13 @@ An asset code identifies nothing; **the issuer account is the identity.**
 Anyone can issue a token called `USDC`. Every issuer is read from the issuer's
 own `stellar.toml` per SEP-1, with the verification date recorded, because
 issuers rotate. Wire form is `stellar:CODE:ISSUER`, `stellar:native`, or
-`iso4217:CODE`.
+`iso4217:CODE` — the same SEP-38 asset identification format used everywhere
+else in this project. Every asset object on the wire (`send_asset`,
+`receive_asset`, `depends_on` entries) carries this form in its `asset`
+field, alongside the separate `code` and `issuer` fields for a reader who
+wants one or the other. `asset` is omitted when the producer has only a bare
+code to work from and cannot verify the asset's kind or issuer — never
+guessed at.
 
 ### Money on the wire — breaking if altered
 
