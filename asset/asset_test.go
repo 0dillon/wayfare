@@ -164,6 +164,12 @@ func TestIdentifiable(t *testing.T) {
 		{"issued Stellar asset with no issuer", Stellar("USDC", ""), false},
 		{"zero-value asset", Asset{}, false},
 		{"fiat with no code", Asset{Kind: KindFiat}, false},
+		// An unrecognised Kind must not fall through to the Stellar case:
+		// SEP38()'s own default branch renders one as "stellar:CODE:ISSUER"
+		// regardless of Kind, so Identifiable has to refuse it explicitly
+		// rather than let a future Kind value be identified as Stellar by
+		// accident.
+		{"unknown Kind", Asset{Kind: Kind(99), Code: "USDC", Issuer: "GISSUER"}, false},
 	}
 
 	for _, tc := range cases {

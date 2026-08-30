@@ -66,8 +66,14 @@ func (a Asset) Identifiable() bool {
 		return a.Code != ""
 	case a.IsNative():
 		return true
-	default:
+	case a.Kind == KindStellar:
 		return a.Code != "" && a.Issuer != ""
+	default:
+		// An unrecognised Kind is not Stellar just because it fell through
+		// the cases above. SEP38()'s own default branch would still render
+		// one as though it were, so this must refuse it explicitly rather
+		// than let that happen silently.
+		return false
 	}
 }
 
