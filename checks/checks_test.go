@@ -538,6 +538,26 @@ func TestSEP10NotDeclaredIsUndetermined(t *testing.T) {
 	}
 }
 
+// TestSEP10NoProfileIsUndetermined covers the case that precedes "not
+// declared": no stellar.toml was resolved for the anchor at all, so there is
+// nothing to read WEB_AUTH_ENDPOINT from. This must produce the same
+// not-published verdict as a resolved profile with an empty endpoint field,
+// and for the reason that specific branch names — not the generic "check
+// panicked" a nil-pointer dereference would produce if the guard were
+// removed, which is what makes this test able to fail on that mutation.
+func TestSEP10NoProfileIsUndetermined(t *testing.T) {
+	r := Run(ctx(), SEP10EndpointResponds{}, Subject{Domain: "example.test"})
+
+	if r.Determined {
+		t.Error("no resolved profile must be undetermined, not a failure — there is " +
+			"nothing declared to probe, which differs from a declared endpoint that is dead")
+	}
+	if !strings.Contains(r.Reason, "no stellar.toml has been resolved for this anchor") {
+		t.Errorf("Reason = %q, want it to name the missing profile as the cause "+
+			"(a panic-recovery reason here would mean the nil check was removed)", r.Reason)
+	}
+}
+
 // TestSEP10DeclaredButDeadIsAFailure is the other half, and the more damning
 // one: publishing an address that does not answer.
 func TestSEP10DeclaredButDeadIsAFailure(t *testing.T) {
@@ -551,6 +571,51 @@ func TestSEP10DeclaredButDeadIsAFailure(t *testing.T) {
 	}
 	if !strings.Contains(r.Summary, "did not respond") {
 		t.Errorf("Summary = %q, want it to say the endpoint did not respond", r.Summary)
+	}
+}
+
+// TestSEP10ThreeStatesAreDistinct is the discipline issue #183 asks anchor
+// checks to hold: not published, published-and-dead, and published-and-live
+// are three different facts, and none of the three tests below may collapse
+// into another. Mutating sep10_endpoint.go to treat a dead endpoint as
+// undetermined, or an absent one as a failure, breaks this test even though
+// each half already has its own dedicated test above — this is the one place
+// all three are asserted pairwise distinct in a single run.
+func TestSEP10ThreeStatesAreDistinct(t *testing.T) {
+	notPublished := Run(ctx(), SEP10EndpointResponds{}, Subject{Profile: sep10Profile("")})
+	if notPublished.Determined {
+		t.Fatal("not-published must be undetermined")
+	}
+
+	dead := Run(ctx(), SEP10EndpointResponds{}, Subject{
+		Profile: sep10Profile("https://127.0.0.1:1/auth"),
+	})
+	if !dead.Failed() {
+		t.Fatal("published-and-dead must be a determined failure")
+	}
+
+	srv := flagServer(t, 200,
+		`{"transaction":"AAAAAgAAAABmocked","network_passphrase":"Public Global Stellar Network ; September 2015"}`)
+	live := Run(ctx(), SEP10EndpointResponds{HTTPClient: srv.Client()},
+		Subject{Profile: sep10Profile(srv.URL + "/auth")})
+	if !live.Determined || !live.Passed {
+		t.Fatal("published-and-live must be a determined pass")
+	}
+
+	// Pairwise: no two of the three share both Determined and Passed, which
+	// is what would let a reader mistake one state for another downstream.
+	states := []struct {
+		name string
+		r    CheckResult
+	}{{"not-published", notPublished}, {"dead", dead}, {"live", live}}
+	for i := range states {
+		for j := i + 1; j < len(states); j++ {
+			a, b := states[i], states[j]
+			if a.r.Determined == b.r.Determined && a.r.Passed == b.r.Passed {
+				t.Errorf("%s and %s collapsed into the same (determined, passed) pair: (%v, %v)",
+					a.name, b.name, a.r.Determined, a.r.Passed)
+			}
+		}
 	}
 }
 
