@@ -430,6 +430,20 @@ Deployment, cost and backup: **[docs/deployment.md](docs/deployment.md)**
 - [GET /api/corridor/trend](docs/api.md#get-apicorridortrend)
 - `GET /` single-file UI, no build step
 
+Beyond the contracts above, two fields to know. **`live`** is on every
+response: `false` means the reading came from history because a live
+measurement failed, and `stale` then carries its age. With no stored run, the
+request errors — nothing is ever synthesised to fill the gap.
+
+Every quote also carries **`kind`** — `"dex"` for value settled entirely
+on-chain through path payments, or `"anchor-sep38"` for a priced quote from an
+anchor's own RFQ endpoint. The two can price the same pair differently, and a
+client that conflated them would misattribute the loss to the wrong rail.
+Every quote in a response is `"dex"` today — live pathfinding is the only
+thing this project prices — but the field is on the wire from the start so a
+caller never has to guess which rail a figure came from once anchor pricing
+lands (a live SEP-38 round-trip has never been performed — see
+[#180](https://github.com/Wayfare-labs/wayfare/issues/180)).
 The API is public, keyless and read-only, and answers cross-origin requests
 from any origin (`Access-Control-Allow-Origin: *`), so browser consumers on
 another origin can call it directly. No credentials are ever attached to a

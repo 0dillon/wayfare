@@ -412,6 +412,10 @@ func staleJSON(rec *runstore.Record, pair string, now time.Time) route.CorridorJ
 		}
 		if r.Priced {
 			rj.Quote = &route.QuoteJSON{
+				// Hardcoded for the same reason Source is: runstore.Rung
+				// carries no kind of its own, and every record in the store
+				// today was priced on-chain. See route.QuoteJSON.Kind.
+				Kind:          string(route.KindDEX),
 				Description:   r.Path,
 				Source:        "stellar-dex",
 				ReceiveAmount: r.ReceiveAmount,
@@ -429,6 +433,7 @@ func staleJSON(rec *runstore.Record, pair string, now time.Time) route.CorridorJ
 	// stale path, the recommendation the monitor refused to make live.
 	if rec.Recommended != nil {
 		out.Recommended = &route.QuoteJSON{
+			Kind:          string(route.KindDEX),
 			Description:   rec.Recommended.Path,
 			Source:        "stellar-dex",
 			ReceiveAmount: rec.Recommended.ReceiveAmount,
