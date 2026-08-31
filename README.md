@@ -449,6 +449,10 @@ from any origin (`Access-Control-Allow-Origin: *`), so browser consumers on
 another origin can call it directly. No credentials are ever attached to a
 cross-origin read.
 
+The `sizes` parameter overrides the default ladder (0.1 → 5000 USDC across
+12 rungs). The default sizes and the rationale for each rung are documented
+in **[docs/ladder-sizes.md](docs/ladder-sizes.md)**.
+
 Beyond the contracts above, one field to know: **`live`** is on every response.
 `false` means the reading came from history because a live measurement failed,
 and `stale` then carries its age. With no stored run, the request errors —
