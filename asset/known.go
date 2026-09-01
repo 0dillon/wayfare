@@ -291,7 +291,6 @@ var registry = []Entry{
 		SourceURL:        "https://token-metadata.paxos.com/.well-known/stellar.toml",
 		HomeDomain:       "token-metadata.paxos.com",
 	},
->>>>>>> upstream/main
 }
 
 var (
